@@ -1,5 +1,6 @@
 # Skill Scanner
 _This is not production ready._
+
 A _very_ simple tool to detect malware and security antipatterns in AI agent skills. Scans skill directories for Claude Code, Cursor, OpenCode, Codex CLI, OpenClaw, Letta Code, and other AgentSkills-compatible tools.
 
 
