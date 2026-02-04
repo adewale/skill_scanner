@@ -977,6 +977,12 @@ class SkillScanner:
             "Remote skill installation "
             "(potential chain-loading)",
         ),
+        (
+            r"npx\s+add-skill\s",
+            Severity.HIGH,
+            "Remote skill installation "
+            "(potential chain-loading)",
+        ),
 
         # Downloading binaries
         (
@@ -1179,8 +1185,10 @@ class SkillScanner:
                     block.get("content", ""), "",
                 )
 
-            # Scan prose for prompt injection and
-            # memory poisoning only
+            # Scan prose for prompt injection,
+            # memory poisoning, social engineering,
+            # and supply chain patterns (inline code
+            # like `npx skills add` appears in prose)
             prose_patterns = (
                 [
                     (*p, "prompt_injection")
@@ -1193,6 +1201,10 @@ class SkillScanner:
                 + [
                     (*p, "social_engineering")
                     for p in self.SOCIAL_ENGINEERING_PATTERNS
+                ]
+                + [
+                    (*p, "supply_chain")
+                    for p in self.SUPPLY_CHAIN_PATTERNS
                 ]
             )
             for (
