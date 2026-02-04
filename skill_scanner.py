@@ -881,6 +881,25 @@ class SkillScanner:
             Severity.CRITICAL,
             "Skill self-modification",
         ),
+
+        # Cross-skill chain loading
+        (
+            r"do\s+everything\s+.{0,40}"
+            r"(skill|version)\s+says",
+            Severity.HIGH,
+            "Cross-skill chain-loading delegation",
+        ),
+        (
+            r"follow\s+(all\s+)?instructions\s+"
+            r"(from|in)\s+.{0,30}skill",
+            Severity.HIGH,
+            "Cross-skill instruction delegation",
+        ),
+        (
+            r"run\s+.{0,20}skill\s+first",
+            Severity.MEDIUM,
+            "Skill prerequisite chain",
+        ),
     ]
 
     # Memory poisoning patterns (agent persistence attacks)
@@ -949,6 +968,14 @@ class SkillScanner:
             r"pip\s+install\s+(?!.*==)",
             Severity.LOW,
             "pip install without version",
+        ),
+
+        # Skill installation (chain-loading)
+        (
+            r"npx\s+skills\s+add\s",
+            Severity.HIGH,
+            "Remote skill installation "
+            "(potential chain-loading)",
         ),
 
         # Downloading binaries
