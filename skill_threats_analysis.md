@@ -171,15 +171,15 @@ Based on research from:
 
 | Category | Threats Identified | Scanner Detects | Coverage |
 |----------|-------------------|-----------------|----------|
-| Dangerous Shell Execution | 16 | 16 | **100%** |
-| Data Exfiltration | 18 | 18 | **100%** |
+| Dangerous Shell Execution | 17 | 17 | **100%** |
+| Data Exfiltration | 19 | 19 | **100%** |
 | Suspicious URLs | 14 | 14 | **100%** |
-| Obfuscation | 12 | 12 | **100%** |
-| Supply Chain | 13 | 10 | **77%** |
+| Obfuscation | 12 | 10 | **83%** |
+| Supply Chain | 13 | 9 | **69%** |
 | Prompt Injection | 16 | 13 | **81%** |
-| Memory Poisoning | 10 | 8 | **80%** |
+| Memory Poisoning | 10 | 7 | **70%** |
 | Social Engineering | 10 | 8 | **80%** |
-| **Total** | **109** | **99** | **91%** |
+| **Total** | **111** | **97** | **87%** |
 
 ---
 
