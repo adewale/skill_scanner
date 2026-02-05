@@ -17,6 +17,9 @@ dev = [
     "pyfakefs>=5.0",
     "ruff>=0.4",
     "pre-commit>=3.0",
+    "vulture>=2.11",
+    "bandit>=1.7",
+    "pyright>=1.1",
 ]
 
 [project.scripts]
@@ -66,6 +69,20 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "test_*.py" = ["S", "B", "SIM"]  # Relax security/complexity checks in tests
 "conftest.py" = ["S"]
+
+[tool.vulture]
+paths = ["skill_scanner.py"]
+min_confidence = 80
+exclude = ["test_*.py", "conftest.py"]
+
+[tool.bandit]
+targets = ["skill_scanner.py"]
+skips = ["B310"]  # urllib.request.urlopen - intentional for --url feature
+
+[tool.pyright]
+include = ["skill_scanner.py"]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
 
 [build-system]
 requires = ["hatchling"]

@@ -18,6 +18,20 @@ repos:
 
   - repo: local
     hooks:
+      - id: vulture
+        name: Dead code detection (vulture)
+        entry: vulture skill_scanner.py --min-confidence 80
+        language: python
+        pass_filenames: false
+        additional_dependencies: ['vulture>=2.11']
+
+      - id: bandit
+        name: Security lint (bandit)
+        entry: bandit -c pyproject.toml -q skill_scanner.py
+        language: python
+        pass_filenames: false
+        additional_dependencies: ['bandit>=1.7']
+
       - id: self-scan
         name: Skill Scanner self-scan
         entry: python skill_scanner.py . --fail-on-high
