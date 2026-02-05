@@ -15,16 +15,15 @@ from skill_scanner import (
     Severity,
     SkillMetadata,
     SkillProvenance,
-    SkillScanner,
     get_default_skill_paths,
     main,
     print_findings,
 )
 
-
 # ---------------------------------------------------------------
 # Severity enum
 # ---------------------------------------------------------------
+
 
 class TestSeverityEnum:
     """Verify the five severity levels exist and compare correctly."""
@@ -51,6 +50,7 @@ class TestSeverityEnum:
 # ---------------------------------------------------------------
 # Finding dataclass
 # ---------------------------------------------------------------
+
 
 class TestFindingDataclass:
     """Verify Finding construction and default values."""
@@ -112,6 +112,7 @@ class TestFindingDataclass:
 # ---------------------------------------------------------------
 # SkillProvenance
 # ---------------------------------------------------------------
+
 
 class TestSkillProvenance:
     """Trust score and trust level properties."""
@@ -181,6 +182,7 @@ class TestSkillProvenance:
 # SkillMetadata
 # ---------------------------------------------------------------
 
+
 class TestSkillMetadata:
     """Structure risk score calculation."""
 
@@ -246,6 +248,7 @@ class TestSkillMetadata:
 # ---------------------------------------------------------------
 # ScanResult
 # ---------------------------------------------------------------
+
 
 class TestScanResult:
     """is_safe, critical_count, high_count properties."""
@@ -319,9 +322,24 @@ class TestScanResult:
             skill_path="/p",
             skill_name="s",
             findings=[
-                Finding(severity=Severity.CRITICAL, category="a", description="d", file_path="f"),
-                Finding(severity=Severity.HIGH, category="b", description="d", file_path="f"),
-                Finding(severity=Severity.CRITICAL, category="c", description="d", file_path="f"),
+                Finding(
+                    severity=Severity.CRITICAL,
+                    category="a",
+                    description="d",
+                    file_path="f",
+                ),
+                Finding(
+                    severity=Severity.HIGH,
+                    category="b",
+                    description="d",
+                    file_path="f",
+                ),
+                Finding(
+                    severity=Severity.CRITICAL,
+                    category="c",
+                    description="d",
+                    file_path="f",
+                ),
             ],
         )
         assert r.critical_count == 2
@@ -331,10 +349,30 @@ class TestScanResult:
             skill_path="/p",
             skill_name="s",
             findings=[
-                Finding(severity=Severity.HIGH, category="a", description="d", file_path="f"),
-                Finding(severity=Severity.LOW, category="b", description="d", file_path="f"),
-                Finding(severity=Severity.HIGH, category="c", description="d", file_path="f"),
-                Finding(severity=Severity.HIGH, category="e", description="d", file_path="f"),
+                Finding(
+                    severity=Severity.HIGH,
+                    category="a",
+                    description="d",
+                    file_path="f",
+                ),
+                Finding(
+                    severity=Severity.LOW,
+                    category="b",
+                    description="d",
+                    file_path="f",
+                ),
+                Finding(
+                    severity=Severity.HIGH,
+                    category="c",
+                    description="d",
+                    file_path="f",
+                ),
+                Finding(
+                    severity=Severity.HIGH,
+                    category="e",
+                    description="d",
+                    file_path="f",
+                ),
             ],
         )
         assert r.high_count == 3
@@ -343,6 +381,7 @@ class TestScanResult:
 # ---------------------------------------------------------------
 # get_default_skill_paths
 # ---------------------------------------------------------------
+
 
 class TestGetDefaultSkillPaths:
     """Verify the returned list of default paths."""
@@ -360,6 +399,7 @@ class TestGetDefaultSkillPaths:
 # ---------------------------------------------------------------
 # parse_skill_ast
 # ---------------------------------------------------------------
+
 
 class TestParseSkillAst:
     """AST extraction from benign markdown."""
@@ -409,97 +449,125 @@ class TestParseSkillAst:
 # _should_skip_finding
 # ---------------------------------------------------------------
 
+
 class TestShouldSkipFinding:
     """Whitelist logic with benign inputs only."""
 
     def test_skips_typescript_env_pattern(self, scanner):
         content = "interface Env { DB: D1Database }"
-        assert scanner._should_skip_finding(
-            r"\.env\b",
-            "Environment file access",
-            content,
-            "typescript",
-            "exfiltration",
-        ) is True
+        assert (
+            scanner._should_skip_finding(
+                r"\.env\b",
+                "Environment file access",
+                content,
+                "typescript",
+                "exfiltration",
+            )
+            is True
+        )
 
     def test_does_not_skip_non_ts_env(self, scanner):
         content = "read .env file"
-        assert scanner._should_skip_finding(
-            r"\.env\b",
-            "Environment file access",
-            content,
-            "",
-            "exfiltration",
-        ) is False
+        assert (
+            scanner._should_skip_finding(
+                r"\.env\b",
+                "Environment file access",
+                content,
+                "",
+                "exfiltration",
+            )
+            is False
+        )
 
     def test_skips_safe_localhost_port(self, scanner):
         content = "http://localhost:3000/api"
-        assert scanner._should_skip_finding(
-            r"https?://[^/]+:\d{4,5}/",
-            "URL with non-standard port",
-            content,
-            "",
-            "suspicious_url",
-        ) is True
+        assert (
+            scanner._should_skip_finding(
+                r"https?://[^/]+:\d{4,5}/",
+                "URL with non-standard port",
+                content,
+                "",
+                "suspicious_url",
+            )
+            is True
+        )
 
     def test_does_not_skip_unusual_port(self, scanner):
         content = "http://localhost:4444/api"
-        assert scanner._should_skip_finding(
-            r"https?://[^/]+:\d{4,5}/",
-            "URL with non-standard port",
-            content,
-            "",
-            "suspicious_url",
-        ) is False
+        assert (
+            scanner._should_skip_finding(
+                r"https?://[^/]+:\d{4,5}/",
+                "URL with non-standard port",
+                content,
+                "",
+                "suspicious_url",
+            )
+            is False
+        )
 
 
 # ---------------------------------------------------------------
 # _adjust_severity_for_context
 # ---------------------------------------------------------------
 
+
 class TestAdjustSeverityForContext:
     """Severity adjustment for code block language context."""
 
     def test_downgrade_high_in_typescript(self, scanner):
         result = scanner._adjust_severity_for_context(
-            Severity.HIGH, "typescript", "dangerous_shell",
+            Severity.HIGH,
+            "typescript",
+            "dangerous_shell",
         )
         assert result == Severity.MEDIUM
 
     def test_downgrade_critical_in_python(self, scanner):
         result = scanner._adjust_severity_for_context(
-            Severity.CRITICAL, "python", "obfuscation",
+            Severity.CRITICAL,
+            "python",
+            "obfuscation",
         )
         assert result == Severity.HIGH
 
     def test_no_downgrade_for_prompt_injection(self, scanner):
         result = scanner._adjust_severity_for_context(
-            Severity.HIGH, "typescript", "prompt_injection",
+            Severity.HIGH,
+            "typescript",
+            "prompt_injection",
         )
         assert result == Severity.HIGH
 
     def test_no_downgrade_for_memory_poisoning(self, scanner):
         result = scanner._adjust_severity_for_context(
-            Severity.CRITICAL, "python", "memory_poisoning",
+            Severity.CRITICAL,
+            "python",
+            "memory_poisoning",
         )
         assert result == Severity.CRITICAL
 
     def test_upgrade_high_shell_in_bash(self, scanner):
         result = scanner._adjust_severity_for_context(
-            Severity.HIGH, "bash", "dangerous_shell",
+            Severity.HIGH,
+            "bash",
+            "dangerous_shell",
         )
         assert result == Severity.CRITICAL
 
     def test_no_upgrade_for_non_shell_category(self, scanner):
         result = scanner._adjust_severity_for_context(
-            Severity.HIGH, "bash", "exfiltration",
+            Severity.HIGH,
+            "bash",
+            "exfiltration",
         )
         assert result == Severity.HIGH
 
     def test_medium_unaffected_in_docs(self, scanner):
         """MEDIUM is not downgraded -- only HIGH and CRITICAL are."""
         result = scanner._adjust_severity_for_context(
-            Severity.MEDIUM, "typescript", "obfuscation",
+            Severity.MEDIUM,
+            "typescript",
+            "obfuscation",
         )
         assert result == Severity.MEDIUM
 
@@ -508,21 +576,25 @@ class TestAdjustSeverityForContext:
 # _get_recommendation
 # ---------------------------------------------------------------
 
+
 class TestGetRecommendation:
     """Every category returns a non-empty recommendation."""
 
-    @pytest.mark.parametrize("category", [
-        "dangerous_shell",
-        "exfiltration",
-        "suspicious_url",
-        "obfuscation",
-        "social_engineering",
-        "supply_chain",
-        "prompt_injection",
-        "memory_poisoning",
-        "structure",
-        "provenance",
-    ])
+    @pytest.mark.parametrize(
+        "category",
+        [
+            "dangerous_shell",
+            "exfiltration",
+            "suspicious_url",
+            "obfuscation",
+            "social_engineering",
+            "supply_chain",
+            "prompt_injection",
+            "memory_poisoning",
+            "structure",
+            "provenance",
+        ],
+    )
     def test_known_categories(self, scanner, category):
         rec = scanner._get_recommendation(category)
         assert isinstance(rec, str)
@@ -537,6 +609,7 @@ class TestGetRecommendation:
 # ---------------------------------------------------------------
 # extract_provenance (pyfakefs)
 # ---------------------------------------------------------------
+
 
 class TestExtractProvenance:
     """Provenance extraction using pyfakefs for filesystem."""
@@ -571,7 +644,9 @@ class TestExtractProvenance:
         assert p.has_code_of_conduct is True
 
     def test_license_from_frontmatter(self, fs, scanner):
-        fm = build_skill_md(frontmatter={"license": "MIT"}, body="Hello world.")
+        fm = build_skill_md(
+            frontmatter={"license": "MIT"}, body="Hello world."
+        )
         fs.create_dir("/skill")
         fs.create_file("/skill/SKILL.md", contents=fm)
         p = scanner.extract_provenance(Path("/skill"))
@@ -591,6 +666,7 @@ class TestExtractProvenance:
 # ---------------------------------------------------------------
 # analyze_skill_structure (pyfakefs)
 # ---------------------------------------------------------------
+
 
 class TestAnalyzeSkillStructure:
     """Structural analysis using pyfakefs."""
@@ -639,21 +715,26 @@ class TestAnalyzeSkillStructure:
 # CLI argument parser
 # ---------------------------------------------------------------
 
+
 class TestCLIParser:
     """Verify the real argparse parser inside main() has all flags."""
 
     def test_cli_help_contains_all_flags(self, capsys, monkeypatch):
         """Run main(--help) and verify all expected flags appear."""
         monkeypatch.setattr(
-            "sys.argv", ["skill_scanner.py", "--help"],
+            "sys.argv",
+            ["skill_scanner.py", "--help"],
         )
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
         for flag in [
-            "--verbose", "--all", "--json",
-            "--fail-on-high", "--list-paths",
+            "--verbose",
+            "--all",
+            "--json",
+            "--fail-on-high",
+            "--list-paths",
         ]:
             assert flag in captured.out, (
                 f"Flag {flag} missing from --help output"
@@ -663,6 +744,7 @@ class TestCLIParser:
 # ---------------------------------------------------------------
 # Fix 4: smoke test for print_findings()
 # ---------------------------------------------------------------
+
 
 class TestPrintFindings:
     """Smoke tests for print_findings()."""
@@ -723,6 +805,7 @@ class TestPrintFindings:
 # Fix 5: JSON output test
 # ---------------------------------------------------------------
 
+
 class TestJSONOutput:
     """Verify JSON output structure matches main() format."""
 
@@ -757,15 +840,9 @@ class TestJSONOutput:
         output = {
             "scanned_paths": ["/test"],
             "total_skills": len(results),
-            "skills_with_issues": sum(
-                1 for r in results if r.findings
-            ),
-            "total_critical": sum(
-                r.critical_count for r in results
-            ),
-            "total_high": sum(
-                r.high_count for r in results
-            ),
+            "skills_with_issues": sum(1 for r in results if r.findings),
+            "total_critical": sum(r.critical_count for r in results),
+            "total_high": sum(r.high_count for r in results),
             "results": [
                 {
                     "skill_name": r.skill_name,
@@ -773,9 +850,7 @@ class TestJSONOutput:
                     "is_safe": r.is_safe,
                     "provenance": {
                         "source_url": (
-                            r.provenance.source_url
-                            if r.provenance
-                            else None
+                            r.provenance.source_url if r.provenance else None
                         ),
                         "trust_level": (
                             r.provenance.trust_level
@@ -783,11 +858,11 @@ class TestJSONOutput:
                             else "UNKNOWN"
                         ),
                         "trust_score": (
-                            r.provenance.trust_score
-                            if r.provenance
-                            else 0
+                            r.provenance.trust_score if r.provenance else 0
                         ),
-                    } if r.provenance else None,
+                    }
+                    if r.provenance
+                    else None,
                     "metadata": {
                         "has_scripts_folder": (
                             r.metadata.has_scripts_folder
@@ -799,7 +874,9 @@ class TestJSONOutput:
                             if r.metadata
                             else False
                         ),
-                    } if r.metadata else None,
+                    }
+                    if r.metadata
+                    else None,
                     "findings": [
                         {
                             "severity": f.severity.value,
@@ -819,17 +896,22 @@ class TestJSONOutput:
 
         # Verify top-level keys
         for key in [
-            "scanned_paths", "total_skills",
-            "skills_with_issues", "total_critical",
-            "total_high", "results",
+            "scanned_paths",
+            "total_skills",
+            "skills_with_issues",
+            "total_critical",
+            "total_high",
+            "results",
         ]:
             assert key in output, f"Missing top-level key: {key}"
 
         # Verify result entry keys
         entry = output["results"][0]
         for key in [
-            "skill_name", "provenance",
-            "metadata", "findings",
+            "skill_name",
+            "provenance",
+            "metadata",
+            "findings",
         ]:
             assert key in entry, f"Missing result key: {key}"
 

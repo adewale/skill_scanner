@@ -5,13 +5,7 @@ import textwrap
 import pytest
 
 from skill_scanner import (
-    Finding,
-    ScanResult,
-    Severity,
-    SkillMetadata,
-    SkillProvenance,
     SkillScanner,
-    get_default_skill_paths,
 )
 
 

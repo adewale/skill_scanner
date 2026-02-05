@@ -8,8 +8,6 @@ import inspect
 import re
 from pathlib import Path
 
-import pytest
-
 from skill_scanner import (
     SkillScanner,
     get_default_skill_paths,
@@ -26,6 +24,7 @@ def _read(name: str) -> str:
 # ---------------------------------------------------------------
 # README.md
 # ---------------------------------------------------------------
+
 
 class TestReadmeDetectionCategories:
     """README lists all 8 detection categories."""
@@ -92,7 +91,13 @@ class TestReadmeCLIFlags:
         src = inspect.getsource(
             __import__("skill_scanner").main,
         )
-        flags = ["--verbose", "--all", "--json", "--fail-on-high", "--list-paths"]
+        flags = [
+            "--verbose",
+            "--all",
+            "--json",
+            "--fail-on-high",
+            "--list-paths",
+        ]
         for flag in flags:
             assert flag in readme, f"README missing CLI flag: {flag}"
             assert flag in src, f"main() missing CLI flag: {flag}"
@@ -101,6 +106,7 @@ class TestReadmeCLIFlags:
 # ---------------------------------------------------------------
 # HOW_IT_WORKS.md
 # ---------------------------------------------------------------
+
 
 class TestHowItWorksPatternCount:
     """HOW_IT_WORKS.md claims '272+ patterns' -- verify lower bound."""
@@ -153,6 +159,7 @@ class TestHowItWorksFunctionReferences:
 # skill_threats_analysis.md
 # ---------------------------------------------------------------
 
+
 class TestThreatAnalysisCoverage:
     """Coverage table category counts match actual pattern list lengths.
 
@@ -175,14 +182,9 @@ class TestThreatAnalysisCoverage:
 
     def _extract_row(self, doc, row_name):
         """Extract (threats_identified, scanner_detects) from a coverage row."""
-        pattern = (
-            re.escape(row_name)
-            + r"[^|]*\|\s*(\d+)\s*\|\s*(\d+)\s*\|"
-        )
+        pattern = re.escape(row_name) + r"[^|]*\|\s*(\d+)\s*\|\s*(\d+)\s*\|"
         match = re.search(pattern, doc)
-        assert match, (
-            f"Coverage row '{row_name}' not found in table"
-        )
+        assert match, f"Coverage row '{row_name}' not found in table"
         return int(match.group(1)), int(match.group(2))
 
     def test_coverage_table_exists(self):
@@ -195,8 +197,7 @@ class TestThreatAnalysisCoverage:
         _, doc_detects = self._extract_row(doc, "Dangerous Shell")
         code_count = len(scanner.DANGEROUS_SHELL_PATTERNS)
         assert code_count == doc_detects, (
-            f"Dangerous Shell: code has {code_count}, "
-            f"doc claims {doc_detects}"
+            f"Dangerous Shell: code has {code_count}, doc claims {doc_detects}"
         )
 
     def test_exfiltration_count(self):
@@ -205,8 +206,7 @@ class TestThreatAnalysisCoverage:
         _, doc_detects = self._extract_row(doc, "Data Exfiltration")
         code_count = len(scanner.EXFILTRATION_PATTERNS)
         assert code_count == doc_detects, (
-            f"Exfiltration: code has {code_count}, "
-            f"doc claims {doc_detects}"
+            f"Exfiltration: code has {code_count}, doc claims {doc_detects}"
         )
 
     def test_suspicious_url_count(self):
@@ -215,8 +215,7 @@ class TestThreatAnalysisCoverage:
         _, doc_detects = self._extract_row(doc, "Suspicious URL")
         code_count = len(scanner.SUSPICIOUS_URL_PATTERNS)
         assert code_count == doc_detects, (
-            f"Suspicious URL: code has {code_count}, "
-            f"doc claims {doc_detects}"
+            f"Suspicious URL: code has {code_count}, doc claims {doc_detects}"
         )
 
     def test_obfuscation_count(self):
@@ -225,8 +224,7 @@ class TestThreatAnalysisCoverage:
         _, doc_detects = self._extract_row(doc, "Obfuscation")
         code_count = len(scanner.OBFUSCATION_PATTERNS)
         assert code_count == doc_detects, (
-            f"Obfuscation: code has {code_count}, "
-            f"doc claims {doc_detects}"
+            f"Obfuscation: code has {code_count}, doc claims {doc_detects}"
         )
 
     def test_supply_chain_count(self):
@@ -235,8 +233,7 @@ class TestThreatAnalysisCoverage:
         _, doc_detects = self._extract_row(doc, "Supply Chain")
         code_count = len(scanner.SUPPLY_CHAIN_PATTERNS)
         assert code_count == doc_detects, (
-            f"Supply Chain: code has {code_count}, "
-            f"doc claims {doc_detects}"
+            f"Supply Chain: code has {code_count}, doc claims {doc_detects}"
         )
 
     def test_prompt_injection_count(self):
@@ -298,7 +295,6 @@ class TestThreatAnalysisCoverage:
         # checks that are not in pattern lists, so verify it is
         # consistent with the sum of all "Scanner Detects" column
         # values from per-category rows.
-        scanner = SkillScanner()
         row_sum = 0
         for row_name in self.CATEGORIES:
             _, detects = self._extract_row(doc, row_name)

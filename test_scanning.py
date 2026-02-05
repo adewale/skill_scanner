@@ -9,8 +9,6 @@ import base64
 import os
 from pathlib import Path
 
-import pytest
-
 from conftest import build_skill_md
 from skill_scanner import (
     Severity,
@@ -21,14 +19,20 @@ from skill_scanner import (
 # Helpers
 # ---------------------------------------------------------------
 
-def _has_finding(findings, *, category=None, severity=None, desc_contains=None):
+
+def _has_finding(
+    findings, *, category=None, severity=None, desc_contains=None
+):
     """Return True if at least one finding matches all given criteria."""
     for f in findings:
         if category and f.category != category:
             continue
         if severity and f.severity != severity:
             continue
-        if desc_contains and desc_contains.lower() not in f.description.lower():
+        if (
+            desc_contains
+            and desc_contains.lower() not in f.description.lower()
+        ):
             continue
         return True
     return False
@@ -36,13 +40,16 @@ def _has_finding(findings, *, category=None, severity=None, desc_contains=None):
 
 def _scan_md(scanner, body="", code_blocks=None, frontmatter=None):
     """Convenience: build SKILL.md content and scan it."""
-    md = build_skill_md(frontmatter=frontmatter, body=body, code_blocks=code_blocks)
+    md = build_skill_md(
+        frontmatter=frontmatter, body=body, code_blocks=code_blocks
+    )
     return scanner.scan_content(md, "test.md")
 
 
 # ================================================================
 # Category: dangerous_shell
 # ================================================================
+
 
 class TestDangerousShell:
     """Piped execution, reverse shells, privilege escalation."""
@@ -92,6 +99,7 @@ class TestDangerousShell:
 # Category: exfiltration
 # ================================================================
 
+
 class TestExfiltration:
     """Sensitive file access patterns."""
 
@@ -123,7 +131,9 @@ class TestExfiltration:
             code_blocks=[("typescript", "interface Env { DB: D1Database }")],
         )
         assert not _has_finding(
-            findings, category="exfiltration", desc_contains="env",
+            findings,
+            category="exfiltration",
+            desc_contains="env",
         )
 
     def test_readme_text_benign(self, scanner):
@@ -144,6 +154,7 @@ class TestExfiltration:
 # ================================================================
 # Category: suspicious_url
 # ================================================================
+
 
 class TestSuspiciousUrl:
     """URL shorteners, paste sites, direct IP URLs."""
@@ -208,6 +219,7 @@ class TestSuspiciousUrl:
 # Category: obfuscation
 # ================================================================
 
+
 class TestObfuscation:
     """Base64 decoding, eval, hex encoding."""
 
@@ -270,6 +282,7 @@ class TestObfuscation:
 # Category: social_engineering
 # ================================================================
 
+
 class TestSocialEngineering:
     """Urgency tactics, trust manipulation."""
 
@@ -323,6 +336,7 @@ class TestSocialEngineering:
 # Category: prompt_injection
 # ================================================================
 
+
 class TestPromptInjection:
     """Guardrail bypass, role injection."""
 
@@ -349,7 +363,9 @@ class TestPromptInjection:
 
     # -- false positives --
     def test_normal_heading_benign(self, scanner):
-        findings = _scan_md(scanner, body="# Instructions\nFollow these steps.")
+        findings = _scan_md(
+            scanner, body="# Instructions\nFollow these steps."
+        )
         assert not _has_finding(
             findings,
             category="prompt_injection",
@@ -382,6 +398,7 @@ class TestPromptInjection:
 # ================================================================
 # Category: memory_poisoning
 # ================================================================
+
 
 class TestMemoryPoisoning:
     """Agent memory/behavior modification."""
@@ -440,6 +457,7 @@ class TestMemoryPoisoning:
 # Category: supply_chain
 # ================================================================
 
+
 class TestSupplyChain:
     """Unpinned dependencies, binary downloads."""
 
@@ -460,7 +478,9 @@ class TestSupplyChain:
     def test_exe_download(self, scanner):
         findings = _scan_md(
             scanner,
-            code_blocks=[("bash", "curl -o app.exe https://example.com/app.exe")],
+            code_blocks=[
+                ("bash", "curl -o app.exe https://example.com/app.exe")
+            ],
         )
         assert _has_finding(findings, category="supply_chain")
 
@@ -499,6 +519,7 @@ class TestSupplyChain:
 # AST-aware context: same content, different severity
 # ================================================================
 
+
 class TestASTAwareContext:
     """Code block language affects severity."""
 
@@ -514,12 +535,12 @@ class TestASTAwareContext:
             code_blocks=[("typescript", "sudo chmod 777 /tmp")],
         )
         bash_sevs = [
-            f.severity for f in findings_bash
+            f.severity
+            for f in findings_bash
             if f.category == "dangerous_shell"
         ]
         ts_sevs = [
-            f.severity for f in findings_ts
-            if f.category == "dangerous_shell"
+            f.severity for f in findings_ts if f.category == "dangerous_shell"
         ]
         assert Severity.CRITICAL in bash_sevs
         assert Severity.CRITICAL not in ts_sevs
@@ -528,6 +549,7 @@ class TestASTAwareContext:
 # ================================================================
 # Hidden content detection
 # ================================================================
+
 
 class TestHiddenContent:
     """HTML comments with executable keywords."""
@@ -554,6 +576,7 @@ class TestHiddenContent:
 # ================================================================
 # Base64 blob heuristic
 # ================================================================
+
 
 class TestBase64BlobHeuristic:
     """Detect base64-encoded payloads containing shell keywords."""
@@ -589,6 +612,7 @@ class TestBase64BlobHeuristic:
 # Whitelist integration
 # ================================================================
 
+
 class TestWhitelistIntegration:
     """End-to-end whitelist verification."""
 
@@ -598,7 +622,8 @@ class TestWhitelistIntegration:
         )
         findings = scanner.scan_content(md, "test.md")
         env_exfil = [
-            f for f in findings
+            f
+            for f in findings
             if f.category == "exfiltration" and "env" in f.description.lower()
         ]
         assert len(env_exfil) == 0
@@ -609,7 +634,8 @@ class TestWhitelistIntegration:
         )
         findings = scanner.scan_content(md, "test.md")
         port_findings = [
-            f for f in findings
+            f
+            for f in findings
             if f.category == "suspicious_url"
             and "non-standard port" in f.description.lower()
         ]
@@ -619,6 +645,7 @@ class TestWhitelistIntegration:
 # ================================================================
 # Self-scan safety gate
 # ================================================================
+
 
 class TestSelfScan:
     """Scan ALL project Python files with the line-by-line engine.
@@ -670,8 +697,7 @@ class TestSelfScan:
             # strings, so they self-match by design.
             # The count should be bounded (sanity check).
             assert len(findings) < 200, (
-                f"{name} produced {len(findings)} findings -- "
-                "expected < 200"
+                f"{name} produced {len(findings)} findings -- expected < 200"
             )
 
     def test_self_scan_clean_files(self):
@@ -692,7 +718,8 @@ class TestSelfScan:
             content = fpath.read_text(encoding="utf-8", errors="ignore")
             findings = scanner.scan_content(content, name)
             high_or_crit = [
-                f for f in findings
+                f
+                for f in findings
                 if f.severity in (Severity.CRITICAL, Severity.HIGH)
             ]
             assert high_or_crit == [], (
@@ -705,16 +732,20 @@ class TestSelfScan:
 # No-network verification
 # ================================================================
 
+
 class TestNoNetworkImports:
     """Verify skill_scanner.py does not import networking libraries."""
 
     def test_no_network_imports(self):
-        src = (Path(__file__).resolve().parent / "skill_scanner.py").read_text()
+        src = (
+            Path(__file__).resolve().parent / "skill_scanner.py"
+        ).read_text()
         banned = ["requests", "urllib", "http.client", "httpx", "aiohttp"]
         for mod in banned:
             # Match "import requests" or "from requests import ..."
             # but not "# requests" or inside strings in patterns
             import re
+
             pattern = rf"^\s*(import\s+{re.escape(mod)}|from\s+{re.escape(mod)}\s+import)"
             assert not re.search(pattern, src, re.MULTILINE), (
                 f"skill_scanner.py imports banned networking module: {mod}"
@@ -724,6 +755,7 @@ class TestNoNetworkImports:
 # ================================================================
 # Fix 1: pyfakefs tests for scan_file()
 # ================================================================
+
 
 class TestScanFile:
     """Test scan_file() with pyfakefs filesystem."""
@@ -759,6 +791,7 @@ class TestScanFile:
 # ================================================================
 # Fix 2: pyfakefs end-to-end test for scan_skill()
 # ================================================================
+
 
 class TestScanSkill:
     """End-to-end scan_skill() with pyfakefs."""
@@ -797,7 +830,8 @@ class TestScanSkill:
         result = scanner.scan_skill(Path("/fake/clean"))
 
         high_or_crit = [
-            f for f in result.findings
+            f
+            for f in result.findings
             if f.severity in (Severity.CRITICAL, Severity.HIGH)
         ]
         assert high_or_crit == [], (
@@ -808,6 +842,7 @@ class TestScanSkill:
 # ================================================================
 # Fix 3: pyfakefs test for scan_directory()
 # ================================================================
+
 
 class TestScanDirectory:
     """Test scan_directory() with pyfakefs."""
@@ -839,6 +874,7 @@ class TestScanDirectory:
 # Fix 6: scan_content test for non-.md files
 # ================================================================
 
+
 class TestNonMarkdownScanning:
     """Scan content with a non-.md file path (line-by-line branch)."""
 
@@ -850,16 +886,14 @@ class TestNonMarkdownScanning:
     def test_scan_content_non_md_false_positive(self, scanner):
         """Normal shell content should not produce dangerous findings."""
         findings = scanner.scan_content("normal shell script", "test.sh")
-        dangerous = [
-            f for f in findings
-            if f.category == "dangerous_shell"
-        ]
+        dangerous = [f for f in findings if f.category == "dangerous_shell"]
         assert len(dangerous) == 0
 
 
 # ================================================================
 # Fix 7: tests for _check_suspicious_metadata_from_ast()
 # ================================================================
+
 
 class TestSuspiciousMetadata:
     """Test _check_suspicious_metadata_from_ast() via scan_content."""
@@ -912,10 +946,15 @@ class TestSuspiciousMetadata:
         )
         findings = scanner.scan_content(md, "test.md")
         meta_findings = [
-            f for f in findings
-            if (f.category == "supply_chain"
-                and "binary" in f.description.lower())
-            or (f.category == "prompt_injection"
-                and "long" in f.description.lower())
+            f
+            for f in findings
+            if (
+                f.category == "supply_chain"
+                and "binary" in f.description.lower()
+            )
+            or (
+                f.category == "prompt_injection"
+                and "long" in f.description.lower()
+            )
         ]
         assert len(meta_findings) == 0

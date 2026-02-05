@@ -126,18 +126,18 @@ class Severity(Enum):
 
 # Standard development ports - not suspicious for localhost
 SAFE_LOCALHOST_PORTS = {
-    3000,   # Node.js/React dev server
-    3001,   # Common alternative
-    4000,   # Phoenix/other frameworks
-    5000,   # Flask default
-    5173,   # Vite dev server
-    5174,   # Vite alternative
-    8000,   # Django/Python common
-    8080,   # Common HTTP alt port
-    8787,   # Cloudflare Workers default
-    8788,   # Cloudflare Wrangler dev
-    8789,   # Wrangler alternative
-    9000,   # Various tools
+    3000,  # Node.js/React dev server
+    3001,  # Common alternative
+    4000,  # Phoenix/other frameworks
+    5000,  # Flask default
+    5173,  # Vite dev server
+    5174,  # Vite alternative
+    8000,  # Django/Python common
+    8080,  # Common HTTP alt port
+    8787,  # Cloudflare Workers default
+    8788,  # Cloudflare Wrangler dev
+    8789,  # Wrangler alternative
+    9000,  # Various tools
 }
 
 # TypeScript/JavaScript patterns that look like env access
@@ -156,20 +156,44 @@ TYPESCRIPT_ENV_PATTERNS = [
 # Languages where patterns are likely illustrative,
 # not executable
 DOCUMENTATION_LANGUAGES = {
-    "typescript", "ts", "tsx",
-    "javascript", "js", "jsx",
-    "python", "py",
-    "go", "rust", "java", "csharp", "cs",
-    "json", "yaml", "toml", "xml",
-    "sql", "graphql",
-    "html", "css", "scss",
-    "markdown", "md", "text", "txt",
+    "typescript",
+    "ts",
+    "tsx",
+    "javascript",
+    "js",
+    "jsx",
+    "python",
+    "py",
+    "go",
+    "rust",
+    "java",
+    "csharp",
+    "cs",
+    "json",
+    "yaml",
+    "toml",
+    "xml",
+    "sql",
+    "graphql",
+    "html",
+    "css",
+    "scss",
+    "markdown",
+    "md",
+    "text",
+    "txt",
 }
 
 # Shell languages where patterns ARE executable/concerning
 EXECUTABLE_LANGUAGES = {
-    "bash", "sh", "shell", "zsh",
-    "powershell", "ps1", "cmd", "bat",
+    "bash",
+    "sh",
+    "shell",
+    "zsh",
+    "powershell",
+    "ps1",
+    "cmd",
+    "bat",
     "fish",
 }
 
@@ -308,18 +332,12 @@ class ScanResult:
     @property
     def critical_count(self) -> int:
         """Count of critical findings."""
-        return sum(
-            1 for f in self.findings
-            if f.severity == Severity.CRITICAL
-        )
+        return sum(1 for f in self.findings if f.severity == Severity.CRITICAL)
 
     @property
     def high_count(self) -> int:
         """Count of high findings."""
-        return sum(
-            1 for f in self.findings
-            if f.severity == Severity.HIGH
-        )
+        return sum(1 for f in self.findings if f.severity == Severity.HIGH)
 
 
 # === COMMON SKILL LOCATIONS ===
@@ -355,30 +373,23 @@ def get_default_skill_paths() -> list[Path]:
         # Claude Code
         home / ".claude" / "skills",
         cwd / ".claude" / "skills",
-
         # Cursor
         home / ".cursor" / "skills",
         cwd / ".cursor" / "skills",
-
         # OpenAI Codex CLI
         home / ".codex" / "skills",
-
         # OpenCode
         xdg_config / "opencode" / "skills",
         cwd / ".opencode" / "skills",
-
         # OpenClaw / Clawdbot / Moltbot
         home / ".openclaw" / "skills",
         home / ".clawdbot" / "skills",  # legacy
-        home / "openclaw" / "skills",   # legacy
-        cwd / "skills",                 # workspace
-
+        home / "openclaw" / "skills",  # legacy
+        cwd / "skills",  # workspace
         # Letta Code
         cwd / ".skills",
-
         # Skillport
         home / ".skillport" / "skills",
-
         # OpenSkills universal location
         cwd / ".agent" / "skills",
     ]
@@ -390,9 +401,7 @@ class SkillScanner:
     # === PATTERN DEFINITIONS ===
 
     # Dangerous shell patterns (CRITICAL/HIGH severity)
-    DANGEROUS_SHELL_PATTERNS: ClassVar[
-        list[tuple[str, Severity, str]]
-    ] = [
+    DANGEROUS_SHELL_PATTERNS: ClassVar[list[tuple[str, Severity, str]]] = [
         # Piped execution - classic attack vector
         (
             r"curl\s+[^|]*\|\s*(ba)?sh",
@@ -414,7 +423,6 @@ class SkillScanner:
             Severity.CRITICAL,
             "Piped curl to Node execution",
         ),
-
         # macOS quarantine bypass - malware evasion
         (
             r"xattr\s+-[dr].*com\.apple\.quarantine",
@@ -426,7 +434,6 @@ class SkillScanner:
             Severity.CRITICAL,
             "Disabling macOS Gatekeeper",
         ),
-
         # Privilege escalation
         (
             r"sudo\s+chmod\s+777",
@@ -443,7 +450,6 @@ class SkillScanner:
             Severity.HIGH,
             "Escalating to root shell",
         ),
-
         # Reverse shells
         (
             r"bash\s+-i\s+>&\s*/dev/tcp/",
@@ -460,7 +466,6 @@ class SkillScanner:
             Severity.CRITICAL,
             "Python reverse shell pattern",
         ),
-
         # Persistence mechanisms
         (
             r"crontab\s+-[el]",
@@ -477,7 +482,6 @@ class SkillScanner:
             Severity.MEDIUM,
             "Systemd service enablement",
         ),
-
         # Process hiding/evasion
         (
             r"nohup.*&\s*$",
@@ -492,9 +496,7 @@ class SkillScanner:
     ]
 
     # Data exfiltration patterns
-    EXFILTRATION_PATTERNS: ClassVar[
-        list[tuple[str, Severity, str]]
-    ] = [
+    EXFILTRATION_PATTERNS: ClassVar[list[tuple[str, Severity, str]]] = [
         # Sensitive file access
         (
             r"~?/?\.ssh/id_rsa",
@@ -534,10 +536,8 @@ class SkillScanner:
         (
             r"SOUL\.md|MEMORY\.md",
             Severity.HIGH,
-            "Agent memory file access "
-            "(potential poisoning)",
+            "Agent memory file access (potential poisoning)",
         ),
-
         # Browser data theft
         (
             r"Login Data|Cookies|Local State",
@@ -559,7 +559,6 @@ class SkillScanner:
             Severity.CRITICAL,
             "macOS Keychain access",
         ),
-
         # Cryptocurrency wallet theft
         (
             r"\.exodus/",
@@ -586,7 +585,6 @@ class SkillScanner:
             Severity.CRITICAL,
             "Bitcoin wallet access",
         ),
-
         # Network exfiltration
         (
             r"curl\s+.*POST\s+.*-d",
@@ -601,9 +599,7 @@ class SkillScanner:
     ]
 
     # Suspicious URL patterns
-    SUSPICIOUS_URL_PATTERNS: ClassVar[
-        list[tuple[str, Severity, str]]
-    ] = [
+    SUSPICIOUS_URL_PATTERNS: ClassVar[list[tuple[str, Severity, str]]] = [
         # URL shorteners (obfuscation)
         (
             r"bit\.ly/",
@@ -630,7 +626,6 @@ class SkillScanner:
             Severity.HIGH,
             "URL shortener (is.gd)",
         ),
-
         # Paste/code hosting (used for staging payloads)
         (
             r"pastebin\.com/raw/",
@@ -657,7 +652,6 @@ class SkillScanner:
             Severity.MEDIUM,
             "Hastebin content",
         ),
-
         # Raw file hosting
         (
             r"githubusercontent\.com.*\.sh",
@@ -669,14 +663,12 @@ class SkillScanner:
             Severity.LOW,
             "GitHub raw content",
         ),
-
         # IP addresses in URLs (suspicious)
         (
             r"https?://\d+\.\d+\.\d+\.\d+",
             Severity.HIGH,
             "Direct IP address URL",
         ),
-
         # Non-standard ports
         (
             r"https?://[^/]+:\d{4,5}/",
@@ -686,9 +678,7 @@ class SkillScanner:
     ]
 
     # Obfuscation patterns
-    OBFUSCATION_PATTERNS: ClassVar[
-        list[tuple[str, Severity, str]]
-    ] = [
+    OBFUSCATION_PATTERNS: ClassVar[list[tuple[str, Severity, str]]] = [
         # Base64 encoded commands
         (
             r"base64\s+-[dD]",
@@ -705,7 +695,6 @@ class SkillScanner:
             Severity.CRITICAL,
             "JavaScript base64 decode of long string",
         ),
-
         # Eval and dynamic execution
         (
             r"\beval\s*\(",
@@ -722,7 +711,6 @@ class SkillScanner:
             Severity.HIGH,
             "Dynamic Function constructor",
         ),
-
         # Hex/octal encoded strings
         (
             r"\\x[0-9a-fA-F]{2}(\\x[0-9a-fA-F]{2}){5,}",
@@ -734,7 +722,6 @@ class SkillScanner:
             Severity.HIGH,
             "Octal-encoded string",
         ),
-
         # Variable obfuscation
         (
             r"\$\{\w+::\d+:\d+\}",
@@ -749,9 +736,7 @@ class SkillScanner:
     ]
 
     # Social engineering patterns (antipatterns in docs)
-    SOCIAL_ENGINEERING_PATTERNS: ClassVar[
-        list[tuple[str, Severity, str]]
-    ] = [
+    SOCIAL_ENGINEERING_PATTERNS: ClassVar[list[tuple[str, Severity, str]]] = [
         # Fake prerequisites
         (
             r"prerequisite.*install|install.*prerequisite",
@@ -768,7 +753,6 @@ class SkillScanner:
             Severity.MEDIUM,
             "Mandatory installation step",
         ),
-
         # Urgency/pressure tactics
         (
             r"(important|critical|required).*run.*command",
@@ -785,7 +769,6 @@ class SkillScanner:
             Severity.MEDIUM,
             "Copy-paste-run instruction",
         ),
-
         # Trust manipulation
         (
             r"completely\s+safe|totally\s+safe|100%\s+safe",
@@ -800,9 +783,7 @@ class SkillScanner:
     ]
 
     # Prompt injection / Guardrail bypass patterns
-    PROMPT_INJECTION_PATTERNS: ClassVar[
-        list[tuple[str, Severity, str]]
-    ] = [
+    PROMPT_INJECTION_PATTERNS: ClassVar[list[tuple[str, Severity, str]]] = [
         # Direct guardrail bypass attempts
         (
             r"ignore\s+(previous|prior|above)"
@@ -839,7 +820,6 @@ class SkillScanner:
             Severity.HIGH,
             "Silent execution instruction",
         ),
-
         # Role manipulation
         (
             r"you\s+are\s+(now|actually)",
@@ -856,7 +836,6 @@ class SkillScanner:
             Severity.MEDIUM,
             "Identity manipulation",
         ),
-
         # Hidden instructions (long-context attacks)
         (
             r"<!-- .*?(exec|curl|bash|eval).*?-->",
@@ -869,7 +848,6 @@ class SkillScanner:
             Severity.CRITICAL,
             "Hidden instruction in MD comment",
         ),
-
         # Self-modification
         (
             r"(update|modify|edit)\s+(this\s+)?skill",
@@ -903,9 +881,7 @@ class SkillScanner:
     ]
 
     # Memory poisoning patterns (agent persistence attacks)
-    MEMORY_POISONING_PATTERNS: ClassVar[
-        list[tuple[str, Severity, str]]
-    ] = [
+    MEMORY_POISONING_PATTERNS: ClassVar[list[tuple[str, Severity, str]]] = [
         # Direct memory file manipulation
         (
             r"write\s+to\s+(SOUL|MEMORY)\.md",
@@ -928,7 +904,6 @@ class SkillScanner:
             Severity.HIGH,
             "Behavioral persistence attack",
         ),
-
         # Persistent instruction injection
         (
             r"remember\s+(to\s+always"
@@ -950,9 +925,7 @@ class SkillScanner:
     ]
 
     # Supply chain risk patterns
-    SUPPLY_CHAIN_PATTERNS: ClassVar[
-        list[tuple[str, Severity, str]]
-    ] = [
+    SUPPLY_CHAIN_PATTERNS: ClassVar[list[tuple[str, Severity, str]]] = [
         # npx without version pinning
         (
             r"npx\s+-y\s+\w+(?!\s*@)",
@@ -969,21 +942,17 @@ class SkillScanner:
             Severity.LOW,
             "pip install without version",
         ),
-
         # Skill installation (chain-loading)
         (
             r"npx\s+skills\s+add\s",
             Severity.HIGH,
-            "Remote skill installation "
-            "(potential chain-loading)",
+            "Remote skill installation (potential chain-loading)",
         ),
         (
             r"npx\s+add-skill\s",
             Severity.HIGH,
-            "Remote skill installation "
-            "(potential chain-loading)",
+            "Remote skill installation (potential chain-loading)",
         ),
-
         # Downloading binaries
         (
             r"curl.*-o.*\.exe",
@@ -1005,7 +974,6 @@ class SkillScanner:
             Severity.HIGH,
             "Downloading macOS package",
         ),
-
         # Archive extraction
         (
             r"unzip.*-P",
@@ -1021,11 +989,16 @@ class SkillScanner:
 
     # Files that should be scrutinized more carefully
     SENSITIVE_FILENAMES: ClassVar[list[str]] = [
-        "install.sh", "setup.sh", "init.sh",
+        "install.sh",
+        "setup.sh",
+        "init.sh",
         "bootstrap.sh",
-        "postinstall.js", "preinstall.js",
-        "helper.py", "utils.py",
-        ".env", ".env.example",
+        "postinstall.js",
+        "preinstall.js",
+        "helper.py",
+        "utils.py",
+        ".env",
+        ".env.example",
     ]
 
     def __init__(self, *, verbose: bool = False) -> None:
@@ -1033,22 +1006,10 @@ class SkillScanner:
         self.verbose = verbose
         self.md_parser = MarkdownIt()
         self.all_patterns = (
-            [
-                (*p, "dangerous_shell")
-                for p in self.DANGEROUS_SHELL_PATTERNS
-            ]
-            + [
-                (*p, "exfiltration")
-                for p in self.EXFILTRATION_PATTERNS
-            ]
-            + [
-                (*p, "suspicious_url")
-                for p in self.SUSPICIOUS_URL_PATTERNS
-            ]
-            + [
-                (*p, "obfuscation")
-                for p in self.OBFUSCATION_PATTERNS
-            ]
+            [(*p, "dangerous_shell") for p in self.DANGEROUS_SHELL_PATTERNS]
+            + [(*p, "exfiltration") for p in self.EXFILTRATION_PATTERNS]
+            + [(*p, "suspicious_url") for p in self.SUSPICIOUS_URL_PATTERNS]
+            + [(*p, "obfuscation") for p in self.OBFUSCATION_PATTERNS]
             + [
                 (*p, "social_engineering")
                 for p in self.SOCIAL_ENGINEERING_PATTERNS
@@ -1061,27 +1022,26 @@ class SkillScanner:
                 (*p, "memory_poisoning")
                 for p in self.MEMORY_POISONING_PATTERNS
             ]
-            + [
-                (*p, "supply_chain")
-                for p in self.SUPPLY_CHAIN_PATTERNS
-            ]
+            + [(*p, "supply_chain") for p in self.SUPPLY_CHAIN_PATTERNS]
         )
 
     def _is_typescript_env_pattern(
-        self, content: str,
+        self,
+        content: str,
     ) -> bool:
         """Check if Env match is a TypeScript type pattern."""
         return any(
-            re.search(pattern, content)
-            for pattern in TYPESCRIPT_ENV_PATTERNS
+            re.search(pattern, content) for pattern in TYPESCRIPT_ENV_PATTERNS
         )
 
     def _is_safe_localhost_url(
-        self, url_match: str,
+        self,
+        url_match: str,
     ) -> bool:
         """Check if URL is a safe localhost development URL."""
         port_match = re.search(
-            r"localhost:(\d+)", url_match,
+            r"localhost:(\d+)",
+            url_match,
         )
         if port_match:
             port = int(port_match.group(1))
@@ -1090,13 +1050,15 @@ class SkillScanner:
         return False
 
     def _is_documentation_language(
-        self, lang: str,
+        self,
+        lang: str,
     ) -> bool:
         """Check if code block language is for docs."""
         return lang.lower() in DOCUMENTATION_LANGUAGES
 
     def _is_executable_language(
-        self, lang: str,
+        self,
+        lang: str,
     ) -> bool:
         """Check if code block language is executable."""
         return lang.lower() in EXECUTABLE_LANGUAGES
@@ -1134,12 +1096,9 @@ class SkillScanner:
         """Adjust severity based on code block language."""
         # Patterns in documentation languages are less
         # concerning (they're examples, not executable)
-        if (
-            self._is_documentation_language(lang)
-            and category not in (
-                "prompt_injection",
-                "memory_poisoning",
-            )
+        if self._is_documentation_language(lang) and category not in (
+            "prompt_injection",
+            "memory_poisoning",
         ):
             if severity == Severity.HIGH:
                 return Severity.MEDIUM
@@ -1157,7 +1116,9 @@ class SkillScanner:
         return severity
 
     def scan_content(
-        self, content: str, file_path: str,
+        self,
+        content: str,
+        file_path: str,
     ) -> list[Finding]:
         """Scan text content for malicious patterns."""
         findings = []
@@ -1173,7 +1134,8 @@ class SkillScanner:
             )
             findings.extend(
                 self._check_suspicious_metadata_from_ast(
-                    ast, file_path,
+                    ast,
+                    file_path,
                 ),
             )
 
@@ -1182,7 +1144,8 @@ class SkillScanner:
             prose_content = content
             for block in ast.get("code_blocks", []):
                 prose_content = prose_content.replace(
-                    block.get("content", ""), "",
+                    block.get("content", ""),
+                    "",
                 )
 
             # Scan prose for prompt injection,
@@ -1213,30 +1176,27 @@ class SkillScanner:
                 description,
                 category,
             ) in prose_patterns:
-                findings.extend([
-                    Finding(
-                        severity=severity,
-                        category=category,
-                        description=(
-                            f"{description} "
-                            "(in prose)"
-                        ),
-                        file_path=file_path,
-                        matched_content=(
-                            match.group(0)[:80]
-                        ),
-                        recommendation=(
-                            self._get_recommendation(
-                                category,
-                            )
-                        ),
-                    )
-                    for match in re.finditer(
-                        pattern,
-                        prose_content,
-                        re.IGNORECASE,
-                    )
-                ])
+                findings.extend(
+                    [
+                        Finding(
+                            severity=severity,
+                            category=category,
+                            description=(f"{description} (in prose)"),
+                            file_path=file_path,
+                            matched_content=(match.group(0)[:80]),
+                            recommendation=(
+                                self._get_recommendation(
+                                    category,
+                                )
+                            ),
+                        )
+                        for match in re.finditer(
+                            pattern,
+                            prose_content,
+                            re.IGNORECASE,
+                        )
+                    ]
+                )
         else:
             # For non-markdown files, line-by-line scanning
             lines = content.split("\n")
@@ -1247,30 +1207,31 @@ class SkillScanner:
                 category,
             ) in self.all_patterns:
                 for line_num, line in enumerate(
-                    lines, 1,
+                    lines,
+                    1,
                 ):
-                    findings.extend([
-                        Finding(
-                            severity=severity,
-                            category=category,
-                            description=description,
-                            file_path=file_path,
-                            line_number=line_num,
-                            matched_content=(
-                                match.group(0)[:100]
-                            ),
-                            recommendation=(
-                                self._get_recommendation(
-                                    category,
-                                )
-                            ),
-                        )
-                        for match in re.finditer(
-                            pattern,
-                            line,
-                            re.IGNORECASE,
-                        )
-                    ])
+                    findings.extend(
+                        [
+                            Finding(
+                                severity=severity,
+                                category=category,
+                                description=description,
+                                file_path=file_path,
+                                line_number=line_num,
+                                matched_content=(match.group(0)[:100]),
+                                recommendation=(
+                                    self._get_recommendation(
+                                        category,
+                                    )
+                                ),
+                            )
+                            for match in re.finditer(
+                                pattern,
+                                line,
+                                re.IGNORECASE,
+                            )
+                        ]
+                    )
 
         # Additional heuristic checks
         findings.extend(
@@ -1280,7 +1241,9 @@ class SkillScanner:
         return findings
 
     def _check_suspicious_metadata_from_ast(
-        self, ast: dict, file_path: str,
+        self,
+        ast: dict,
+        file_path: str,
     ) -> list[Finding]:
         """Check parsed frontmatter for suspicious metadata."""
         findings = []
@@ -1292,49 +1255,45 @@ class SkillScanner:
         # Check for suspicious binary requirements
         if "metadata" in metadata:
             meta_str = json.dumps(metadata["metadata"])
-            if (
-                "requires" in meta_str
-                and "bins" in meta_str
-            ):
-                findings.append(Finding(
-                    severity=Severity.LOW,
-                    category="supply_chain",
-                    description=(
-                        "Skill declares binary dependencies"
-                    ),
-                    file_path=file_path,
-                    matched_content=meta_str[:100],
-                    recommendation=(
-                        "Verify all binary dependencies "
-                        "are legitimate"
-                    ),
-                ))
+            if "requires" in meta_str and "bins" in meta_str:
+                findings.append(
+                    Finding(
+                        severity=Severity.LOW,
+                        category="supply_chain",
+                        description=("Skill declares binary dependencies"),
+                        file_path=file_path,
+                        matched_content=meta_str[:100],
+                        recommendation=(
+                            "Verify all binary dependencies are legitimate"
+                        ),
+                    )
+                )
 
         # Check for overly broad descriptions
         desc = metadata.get("description", "")
         if len(desc) > LONG_DESCRIPTION_THRESHOLD:
-            findings.append(Finding(
-                severity=Severity.LOW,
-                category="prompt_injection",
-                description=(
-                    "Unusually long skill description "
-                    "(may hide instructions)"
-                ),
-                file_path=file_path,
-                matched_content=(
-                    f"Description length: "
-                    f"{len(desc)} chars"
-                ),
-                recommendation=(
-                    "Review the full description "
-                    "for hidden instructions"
-                ),
-            ))
+            findings.append(
+                Finding(
+                    severity=Severity.LOW,
+                    category="prompt_injection",
+                    description=(
+                        "Unusually long skill description "
+                        "(may hide instructions)"
+                    ),
+                    file_path=file_path,
+                    matched_content=(f"Description length: {len(desc)} chars"),
+                    recommendation=(
+                        "Review the full description for hidden instructions"
+                    ),
+                )
+            )
 
         return findings
 
     def _check_base64_blobs(
-        self, content: str, file_path: str,
+        self,
+        content: str,
+        file_path: str,
     ) -> list[Finding]:
         """Detect large base64 blobs that might be payloads."""
         findings = []
@@ -1343,34 +1302,36 @@ class SkillScanner:
             blob = match.group(0)
             try:
                 decoded = base64.b64decode(blob).decode(
-                    "utf-8", errors="ignore",
+                    "utf-8",
+                    errors="ignore",
                 )
                 suspicious_keywords = [
-                    "bash", "curl", "wget",
-                    "eval", "exec",
+                    "bash",
+                    "curl",
+                    "wget",
+                    "eval",
+                    "exec",
                 ]
-                if any(
-                    kw in decoded.lower()
-                    for kw in suspicious_keywords
-                ):
-                    findings.append(Finding(
-                        severity=Severity.CRITICAL,
-                        category="obfuscation",
-                        description=(
-                            "Base64 blob containing "
-                            "executable keywords"
-                        ),
-                        file_path=file_path,
-                        matched_content=(
-                            f"Base64: {blob[:50]}..."
-                            " decodes to content "
-                            "with shell commands"
-                        ),
-                        recommendation=(
-                            "Manually decode and review "
-                            "this base64 content"
-                        ),
-                    ))
+                if any(kw in decoded.lower() for kw in suspicious_keywords):
+                    findings.append(
+                        Finding(
+                            severity=Severity.CRITICAL,
+                            category="obfuscation",
+                            description=(
+                                "Base64 blob containing executable keywords"
+                            ),
+                            file_path=file_path,
+                            matched_content=(
+                                f"Base64: {blob[:50]}..."
+                                " decodes to content "
+                                "with shell commands"
+                            ),
+                            recommendation=(
+                                "Manually decode and review "
+                                "this base64 content"
+                            ),
+                        )
+                    )
             except (ValueError, UnicodeDecodeError):
                 pass  # Not valid base64, ignore
         return findings
@@ -1429,7 +1390,8 @@ class SkillScanner:
             ),
         }
         return recommendations.get(
-            category, "Review this finding manually.",
+            category,
+            "Review this finding manually.",
         )
 
     def parse_skill_ast(self, content: str) -> dict:
@@ -1453,7 +1415,7 @@ class SkillScanner:
                 result["frontmatter"] = yaml.safe_load(
                     yaml_match.group(1),
                 )
-                content = content[yaml_match.end():]
+                content = content[yaml_match.end() :]
             except yaml.YAMLError:
                 pass
 
@@ -1464,28 +1426,24 @@ class SkillScanner:
         for token in tokens:
             if token.type == "heading_open":
                 current_heading = token.tag
-            elif (
-                token.type == "inline"
-                and current_heading
-            ):
-                result["headings"].append({
-                    "level": current_heading,
-                    "text": token.content,
-                })
+            elif token.type == "inline" and current_heading:
+                result["headings"].append(
+                    {
+                        "level": current_heading,
+                        "text": token.content,
+                    }
+                )
                 current_heading = None
             elif token.type == "fence":
-                result["code_blocks"].append({
-                    "language": (
-                        token.info.strip()
-                        if token.info
-                        else None
-                    ),
-                    "content": token.content,
-                })
-            elif (
-                token.type == "html_block"
-                and "<!--" in token.content
-            ):
+                result["code_blocks"].append(
+                    {
+                        "language": (
+                            token.info.strip() if token.info else None
+                        ),
+                        "content": token.content,
+                    }
+                )
+            elif token.type == "html_block" and "<!--" in token.content:
                 result["html_comments"].append(
                     token.content,
                 )
@@ -1493,23 +1451,25 @@ class SkillScanner:
         # Extract links using regex
         link_pattern = r"\[([^\]]*)\]\(([^)]+)\)"
         for match in re.finditer(link_pattern, content):
-            result["links"].append({
-                "text": match.group(1),
-                "url": match.group(2),
-            })
+            result["links"].append(
+                {
+                    "text": match.group(1),
+                    "url": match.group(2),
+                }
+            )
 
         return result
 
     def scan_code_blocks(
-        self, ast: dict, file_path: str,
+        self,
+        ast: dict,
+        file_path: str,
     ) -> list[Finding]:
         """Scan code blocks for dangerous patterns."""
         findings = []
 
         for block in ast.get("code_blocks", []):
-            lang = (
-                block.get("language") or ""
-            ).lower()
+            lang = (block.get("language") or "").lower()
             content = block.get("content", "")
 
             # Flag unmarked code blocks with
@@ -1520,20 +1480,21 @@ class SkillScanner:
                 content,
                 re.MULTILINE,
             ):
-                findings.append(Finding(
-                    severity=Severity.MEDIUM,
-                    category="obfuscation",
-                    description=(
-                        "Unmarked code block "
-                        "with shell commands"
-                    ),
-                    file_path=file_path,
-                    matched_content=content[:80],
-                    recommendation=(
-                        "Explicitly mark code block "
-                        "language for transparency"
-                    ),
-                ))
+                findings.append(
+                    Finding(
+                        severity=Severity.MEDIUM,
+                        category="obfuscation",
+                        description=(
+                            "Unmarked code block with shell commands"
+                        ),
+                        file_path=file_path,
+                        matched_content=content[:80],
+                        recommendation=(
+                            "Explicitly mark code block "
+                            "language for transparency"
+                        ),
+                    )
+                )
 
             # Scan code block content with patterns
             for (
@@ -1558,43 +1519,44 @@ class SkillScanner:
                         continue
 
                     # Adjust severity based on context
-                    adjusted_severity = (
-                        self._adjust_severity_for_context(
-                            severity, lang, category,
-                        )
+                    adjusted_severity = self._adjust_severity_for_context(
+                        severity,
+                        lang,
+                        category,
                     )
 
-                    findings.append(Finding(
-                        severity=adjusted_severity,
-                        category=category,
-                        description=(
-                            f"{description} "
-                            f"(in {lang or 'unmarked'}"
-                            " code block)"
-                        ),
-                        file_path=file_path,
-                        matched_content=content[:80],
-                        recommendation=(
-                            self._get_recommendation(
-                                category,
-                            )
-                        ),
-                    ))
+                    findings.append(
+                        Finding(
+                            severity=adjusted_severity,
+                            category=category,
+                            description=(
+                                f"{description} "
+                                f"(in {lang or 'unmarked'}"
+                                " code block)"
+                            ),
+                            file_path=file_path,
+                            matched_content=content[:80],
+                            recommendation=(
+                                self._get_recommendation(
+                                    category,
+                                )
+                            ),
+                        )
+                    )
 
         return findings
 
     def scan_hidden_content(
-        self, ast: dict, file_path: str,
+        self,
+        ast: dict,
+        file_path: str,
     ) -> list[Finding]:
         """Scan for hidden malicious content."""
         return [
             Finding(
                 severity=Severity.CRITICAL,
                 category="prompt_injection",
-                description=(
-                    "Hidden executable instruction "
-                    "in HTML comment"
-                ),
+                description=("Hidden executable instruction in HTML comment"),
                 file_path=file_path,
                 matched_content=comment[:80],
                 recommendation=(
@@ -1604,7 +1566,8 @@ class SkillScanner:
                 ),
             )
             for comment in ast.get(
-                "html_comments", [],
+                "html_comments",
+                [],
             )
             if re.search(
                 r"(curl|wget|bash|eval|exec"
@@ -1620,24 +1583,23 @@ class SkillScanner:
 
         # Check for sensitive filenames
         if file_path.name in self.SENSITIVE_FILENAMES:
-            findings.append(Finding(
-                severity=Severity.INFO,
-                category="file_audit",
-                description=(
-                    f"Sensitive filename: "
-                    f"{file_path.name}"
-                ),
-                file_path=str(file_path),
-                recommendation=(
-                    "This file type requires "
-                    "careful manual review"
-                ),
-            ))
+            findings.append(
+                Finding(
+                    severity=Severity.INFO,
+                    category="file_audit",
+                    description=(f"Sensitive filename: {file_path.name}"),
+                    file_path=str(file_path),
+                    recommendation=(
+                        "This file type requires careful manual review"
+                    ),
+                )
+            )
 
         # Read and scan content
         try:
             content = file_path.read_text(
-                encoding="utf-8", errors="ignore",
+                encoding="utf-8",
+                errors="ignore",
             )
             findings.extend(
                 self.scan_content(content, str(file_path)),
@@ -1645,8 +1607,7 @@ class SkillScanner:
         except OSError as e:
             if self.verbose:
                 print(  # noqa: T201
-                    f"  Warning: Could not read "
-                    f"{file_path}: {e}",
+                    f"  Warning: Could not read {file_path}: {e}",
                 )
 
         return findings
@@ -1674,9 +1635,7 @@ class SkillScanner:
                 source_url,
             )
             if well_known_match:
-                provenance.origin_domain = (
-                    well_known_match.group(1)
-                )
+                provenance.origin_domain = well_known_match.group(1)
                 provenance.is_well_known = True
                 provenance.is_official = True
 
@@ -1692,17 +1651,13 @@ class SkillScanner:
             git_config = git_dir / "config"
             if git_config.exists():
                 try:
-                    config_text = (
-                        git_config.read_text()
-                    )
+                    config_text = git_config.read_text()
                     url_match = re.search(
                         r"url\s*=\s*(.+)",
                         config_text,
                     )
                     if url_match:
-                        url = (
-                            url_match.group(1).strip()
-                        )
+                        url = url_match.group(1).strip()
                         if not provenance.source_url:
                             provenance.source_url = url
 
@@ -1713,9 +1668,7 @@ class SkillScanner:
                             url,
                         )
                         if gh_match:
-                            provenance.publisher = (
-                                gh_match.group(1).lower()
-                            )
+                            provenance.publisher = gh_match.group(1).lower()
                 except OSError:
                     pass
 
@@ -1727,9 +1680,7 @@ class SkillScanner:
         ]:
             if (check_path / "SECURITY.md").exists():
                 provenance.has_security_policy = True
-            if (
-                check_path / "CODE_OF_CONDUCT.md"
-            ).exists():
+            if (check_path / "CODE_OF_CONDUCT.md").exists():
                 provenance.has_code_of_conduct = True
             if (
                 provenance.has_security_policy
@@ -1742,7 +1693,8 @@ class SkillScanner:
         if skill_md.exists():
             try:
                 content = skill_md.read_text(
-                    encoding="utf-8", errors="ignore",
+                    encoding="utf-8",
+                    errors="ignore",
                 )
                 yaml_match = re.match(
                     r"^---\s*\n(.*?)\n---",
@@ -1754,13 +1706,10 @@ class SkillScanner:
                         yaml_match.group(1),
                     )
                     if fm and isinstance(fm, dict):
-                        provenance.license = (
-                            fm.get("license")
-                        )
+                        provenance.license = fm.get("license")
                         if not provenance.publisher:
-                            provenance.publisher = (
-                                fm.get("author")
-                                or fm.get("publisher")
+                            provenance.publisher = fm.get("author") or fm.get(
+                                "publisher"
                             )
             except (OSError, yaml.YAMLError):
                 pass
@@ -1768,37 +1717,33 @@ class SkillScanner:
         return provenance
 
     def analyze_skill_structure(
-        self, skill_path: Path,
+        self,
+        skill_path: Path,
     ) -> SkillMetadata:
         """Analyze skill directory structure for risk."""
         metadata = SkillMetadata()
 
-        if (
-            not skill_path.exists()
-            or not skill_path.is_dir()
-        ):
+        if not skill_path.exists() or not skill_path.is_dir():
             return metadata
 
         # Check for common folders
-        metadata.has_scripts_folder = (
-            (skill_path / "scripts").exists()
-        )
-        metadata.has_references_folder = (
-            (skill_path / "references").exists()
-        )
+        metadata.has_scripts_folder = (skill_path / "scripts").exists()
+        metadata.has_references_folder = (skill_path / "references").exists()
 
         # Count files
         executable_extensions = {
-            ".sh", ".bash", ".py", ".js",
-            ".ps1", ".bat", ".cmd",
+            ".sh",
+            ".bash",
+            ".py",
+            ".js",
+            ".ps1",
+            ".bat",
+            ".cmd",
         }
         for file_path in skill_path.rglob("*"):
             if file_path.is_file():
                 metadata.skill_file_count += 1
-                if (
-                    file_path.suffix.lower()
-                    in executable_extensions
-                ):
+                if file_path.suffix.lower() in executable_extensions:
                     metadata.executable_file_count += 1
 
         # Check frontmatter in SKILL.md
@@ -1806,7 +1751,8 @@ class SkillScanner:
         if skill_md.exists():
             try:
                 content = skill_md.read_text(
-                    encoding="utf-8", errors="ignore",
+                    encoding="utf-8",
+                    errors="ignore",
                 )
                 yaml_match = re.match(
                     r"^---\s*\n(.*?)\n---",
@@ -1819,16 +1765,13 @@ class SkillScanner:
                             yaml_match.group(1),
                         )
                         if fm and isinstance(fm, dict):
-                            metadata.has_valid_frontmatter = (
-                                True
-                            )
+                            metadata.has_valid_frontmatter = True
                             desc = fm.get(
-                                "description", "",
+                                "description",
+                                "",
                             )
                             metadata.description_length = (
-                                len(desc)
-                                if isinstance(desc, str)
-                                else 0
+                                len(desc) if isinstance(desc, str) else 0
                             )
                     except yaml.YAMLError:
                         pass
@@ -1853,10 +1796,7 @@ class SkillScanner:
         skill_name = skill_path.name
 
         # Handle both .skill files and skill directories
-        if (
-            skill_path.is_file()
-            and skill_path.suffix == ".skill"
-        ):
+        if skill_path.is_file() and skill_path.suffix == ".skill":
             skill_name = skill_path.stem
             skill_path = skill_path.parent / skill_name
 
@@ -1870,7 +1810,8 @@ class SkillScanner:
 
         # Extract provenance (trust signals)
         provenance = self.extract_provenance(
-            skill_path, source_url,
+            skill_path,
+            source_url,
         )
         result.provenance = provenance
 
@@ -1883,87 +1824,93 @@ class SkillScanner:
         # Add provenance-based warnings
         if not provenance.is_official:
             if provenance.source_url:
-                result.findings.append(Finding(
-                    severity=Severity.MEDIUM,
-                    category="provenance",
-                    description=(
-                        "Skill not served from "
-                        "/.well-known/skills/ - "
-                        "cannot verify official status"
-                    ),
-                    file_path=str(skill_path),
-                    recommendation=(
-                        "Official skills must be "
-                        "served from the domain's "
-                        "well-known path per RFC"
-                    ),
-                ))
+                result.findings.append(
+                    Finding(
+                        severity=Severity.MEDIUM,
+                        category="provenance",
+                        description=(
+                            "Skill not served from "
+                            "/.well-known/skills/ - "
+                            "cannot verify official status"
+                        ),
+                        file_path=str(skill_path),
+                        recommendation=(
+                            "Official skills must be "
+                            "served from the domain's "
+                            "well-known path per RFC"
+                        ),
+                    )
+                )
             else:
-                result.findings.append(Finding(
-                    severity=Severity.MEDIUM,
-                    category="provenance",
-                    description=(
-                        "Unknown origin - skill source"
-                        " cannot be verified"
-                    ),
-                    file_path=str(skill_path),
-                    recommendation=(
-                        "Only use skills from trusted "
-                        "origins (domain's "
-                        "/.well-known/skills/)"
-                    ),
-                ))
+                result.findings.append(
+                    Finding(
+                        severity=Severity.MEDIUM,
+                        category="provenance",
+                        description=(
+                            "Unknown origin - skill source cannot be verified"
+                        ),
+                        file_path=str(skill_path),
+                        recommendation=(
+                            "Only use skills from trusted "
+                            "origins (domain's "
+                            "/.well-known/skills/)"
+                        ),
+                    )
+                )
 
         # Add structural warnings
         if structure.has_scripts_folder:
-            result.findings.append(Finding(
-                severity=Severity.INFO,
-                category="structure",
-                description=(
-                    "Skill contains scripts/ folder "
-                    "(2.1x higher vulnerability "
-                    "rate per research)"
-                ),
-                file_path=str(skill_path),
-                recommendation=(
-                    "Carefully review all scripts "
-                    "before using this skill"
-                ),
-            ))
+            result.findings.append(
+                Finding(
+                    severity=Severity.INFO,
+                    category="structure",
+                    description=(
+                        "Skill contains scripts/ folder "
+                        "(2.1x higher vulnerability "
+                        "rate per research)"
+                    ),
+                    file_path=str(skill_path),
+                    recommendation=(
+                        "Carefully review all scripts before using this skill"
+                    ),
+                )
+            )
 
         if structure.executable_file_count > MAX_SAFE_EXECUTABLE_COUNT:
-            result.findings.append(Finding(
-                severity=Severity.LOW,
-                category="structure",
-                description=(
-                    f"Skill contains "
-                    f"{structure.executable_file_count}"
-                    " executable files"
-                ),
-                file_path=str(skill_path),
-                recommendation=(
-                    "Review all executable files "
-                    "for malicious content"
-                ),
-            ))
+            result.findings.append(
+                Finding(
+                    severity=Severity.LOW,
+                    category="structure",
+                    description=(
+                        f"Skill contains "
+                        f"{structure.executable_file_count}"
+                        " executable files"
+                    ),
+                    file_path=str(skill_path),
+                    recommendation=(
+                        "Review all executable files for malicious content"
+                    ),
+                )
+            )
 
         if not structure.has_valid_frontmatter:
-            result.findings.append(Finding(
-                severity=Severity.LOW,
-                category="structure",
-                description=(
-                    "SKILL.md missing or has "
-                    "invalid YAML frontmatter"
-                ),
-                file_path=str(
-                    skill_path / "SKILL.md",
-                ),
-                recommendation=(
-                    "Legitimate skills should have "
-                    "proper frontmatter with name "
-                    "and description"
-                ),
-            ))
+            result.findings.append(
+                Finding(
+                    severity=Severity.LOW,
+                    category="structure",
+                    description=(
+                        "SKILL.md missing or has invalid YAML frontmatter"
+                    ),
+                    file_path=str(
+                        skill_path / "SKILL.md",
+                    ),
+                    recommendation=(
+                        "Legitimate skills should have "
+                        "proper frontmatter with name "
+                        "and description"
+                    ),
+                )
+            )
 
         # Scan SKILL.md first
         skill_md = skill_path / "SKILL.md"
@@ -1974,19 +1921,18 @@ class SkillScanner:
 
         # Scan all other files
         skip_extensions = {
-            ".png", ".jpg", ".jpeg", ".gif",
-            ".ico", ".woff", ".ttf",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".ico",
+            ".woff",
+            ".ttf",
         }
         for file_path in skill_path.rglob("*"):
-            if (
-                file_path.is_file()
-                and file_path != skill_md
-            ):
+            if file_path.is_file() and file_path != skill_md:
                 # Skip binary files
-                if (
-                    file_path.suffix.lower()
-                    in skip_extensions
-                ):
+                if file_path.suffix.lower() in skip_extensions:
                     continue
                 result.findings.extend(
                     self.scan_file(file_path),
@@ -1995,7 +1941,8 @@ class SkillScanner:
         return result
 
     def scan_directory(
-        self, directory: Path,
+        self,
+        directory: Path,
     ) -> Generator[ScanResult, None, None]:
         """Scan all skills in a directory."""
         directory = Path(directory)
@@ -2111,15 +2058,15 @@ def print_findings(  # noqa: C901, PLR0912
     # Color codes
     colors = {
         Severity.CRITICAL: "\033[91m",  # Red
-        Severity.HIGH: "\033[93m",      # Yellow
-        Severity.MEDIUM: "\033[94m",    # Blue
-        Severity.LOW: "\033[90m",       # Gray
-        Severity.INFO: "\033[90m",      # Gray
+        Severity.HIGH: "\033[93m",  # Yellow
+        Severity.MEDIUM: "\033[94m",  # Blue
+        Severity.LOW: "\033[90m",  # Gray
+        Severity.INFO: "\033[90m",  # Gray
     }
     trust_colors = {
-        "OFFICIAL": "\033[92m",     # Green
-        "UNVERIFIED": "\033[93m",   # Yellow
-        "UNKNOWN": "\033[91m",      # Red
+        "OFFICIAL": "\033[92m",  # Green
+        "UNVERIFIED": "\033[93m",  # Yellow
+        "UNKNOWN": "\033[91m",  # Red
     }
     reset = "\033[0m"
     bold = "\033[1m"
@@ -2132,7 +2079,8 @@ def print_findings(  # noqa: C901, PLR0912
     if result.provenance:
         p = result.provenance
         trust_color = trust_colors.get(
-            p.trust_level, "",
+            p.trust_level,
+            "",
         )
 
         if p.is_official:
@@ -2146,8 +2094,7 @@ def print_findings(  # noqa: C901, PLR0912
             print(f"Source: {p.source_url}")  # noqa: T201
             if p.publisher:
                 print(  # noqa: T201
-                    f"Publisher: {p.publisher} "
-                    "(not verified)",
+                    f"Publisher: {p.publisher} (not verified)",
                 )
         else:
             print("Origin: Unknown")  # noqa: T201
@@ -2167,11 +2114,9 @@ def print_findings(  # noqa: C901, PLR0912
 
     # Filter out INFO-level provenance findings
     display_findings = [
-        f for f in result.findings
-        if not (
-            f.severity == Severity.INFO
-            and f.category == "provenance"
-        )
+        f
+        for f in result.findings
+        if not (f.severity == Severity.INFO and f.category == "provenance")
     ]
 
     if not display_findings and not show_all:
@@ -2180,45 +2125,35 @@ def print_findings(  # noqa: C901, PLR0912
 
     print(f"  Found {len(display_findings)} issue(s):")  # noqa: T201
     print(  # noqa: T201
-        f"    Critical: {result.critical_count}, "
-        f"High: {result.high_count}",
+        f"    Critical: {result.critical_count}, High: {result.high_count}",
     )
     print()  # noqa: T201
 
     # Group by severity
     for severity in Severity:
-        sev_findings = [
-            f for f in display_findings
-            if f.severity == severity
-        ]
+        sev_findings = [f for f in display_findings if f.severity == severity]
         if not sev_findings:
             continue
 
         color = colors.get(severity, "")
         for finding in sev_findings:
             print(  # noqa: T201
-                f"  {color}[{severity.value}]"
-                f"{reset} {finding.description}",
+                f"  {color}[{severity.value}]{reset} {finding.description}",
             )
             print(  # noqa: T201
                 f"    Category: {finding.category}",
             )
             if finding.line_number:
                 print(  # noqa: T201
-                    f"    Location: "
-                    f"{finding.file_path}:"
-                    f"{finding.line_number}",
+                    f"    Location: {finding.file_path}:{finding.line_number}",
                 )
             if finding.matched_content:
-                truncated = (
-                    finding.matched_content[:MAX_DISPLAY_LENGTH]
-                )
+                truncated = finding.matched_content[:MAX_DISPLAY_LENGTH]
                 if len(finding.matched_content) > MAX_DISPLAY_LENGTH:
                     truncated += "..."
                 print(f"    Match: {truncated}")  # noqa: T201
             print(  # noqa: T201
-                "    Recommendation: "
-                f"{finding.recommendation}",
+                f"    Recommendation: {finding.recommendation}",
             )
             print()  # noqa: T201
 
@@ -2227,12 +2162,9 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
     """Entry point for the skill scanner CLI."""
     parser = argparse.ArgumentParser(
         description=(
-            "Scan AI Agent Skills for malware "
-            "and security antipatterns"
+            "Scan AI Agent Skills for malware and security antipatterns"
         ),
-        formatter_class=(
-            argparse.RawDescriptionHelpFormatter
-        ),
+        formatter_class=(argparse.RawDescriptionHelpFormatter),
         epilog="""
 Default locations scanned (if no path provided):
   Claude Code:  ~/.claude/skills/, .claude/skills/
@@ -2256,17 +2188,18 @@ Examples:
         "path",
         nargs="?",
         help=(
-            "Path to skill directory "
-            "(optional, auto-detects if not provided)"
+            "Path to skill directory (optional, auto-detects if not provided)"
         ),
     )
     parser.add_argument(
-        "-v", "--verbose",
+        "-v",
+        "--verbose",
         action="store_true",
         help="Verbose output",
     )
     parser.add_argument(
-        "-a", "--all",
+        "-a",
+        "--all",
         action="store_true",
         help="Show all skills, even clean ones",
     )
@@ -2278,10 +2211,7 @@ Examples:
     parser.add_argument(
         "--fail-on-high",
         action="store_true",
-        help=(
-            "Exit with code 1 if HIGH or "
-            "CRITICAL findings"
-        ),
+        help=("Exit with code 1 if HIGH or CRITICAL findings"),
     )
     parser.add_argument(
         "--url",
@@ -2293,10 +2223,7 @@ Examples:
     parser.add_argument(
         "--list-paths",
         action="store_true",
-        help=(
-            "List all default paths that "
-            "would be scanned"
-        ),
+        help=("List all default paths that would be scanned"),
     )
 
     args = parser.parse_args()
@@ -2348,19 +2275,11 @@ Examples:
     if args.json:
         # JSON output for CI/CD integration
         output = {
-            "scanned_paths": [
-                str(p) for p in scanned_paths
-            ],
+            "scanned_paths": [str(p) for p in scanned_paths],
             "total_skills": len(all_results),
-            "skills_with_issues": sum(
-                1 for r in all_results if r.findings
-            ),
-            "total_critical": sum(
-                r.critical_count for r in all_results
-            ),
-            "total_high": sum(
-                r.high_count for r in all_results
-            ),
+            "skills_with_issues": sum(1 for r in all_results if r.findings),
+            "total_critical": sum(r.critical_count for r in all_results),
+            "total_high": sum(r.high_count for r in all_results),
             "results": [
                 {
                     "skill_name": r.skill_name,
@@ -2368,9 +2287,7 @@ Examples:
                     "is_safe": r.is_safe,
                     "provenance": {
                         "source_url": (
-                            r.provenance.source_url
-                            if r.provenance
-                            else None
+                            r.provenance.source_url if r.provenance else None
                         ),
                         "origin_domain": (
                             r.provenance.origin_domain
@@ -2378,9 +2295,7 @@ Examples:
                             else None
                         ),
                         "is_official": (
-                            r.provenance.is_official
-                            if r.provenance
-                            else False
+                            r.provenance.is_official if r.provenance else False
                         ),
                         "is_well_known": (
                             r.provenance.is_well_known
@@ -2388,9 +2303,7 @@ Examples:
                             else False
                         ),
                         "publisher": (
-                            r.provenance.publisher
-                            if r.provenance
-                            else None
+                            r.provenance.publisher if r.provenance else None
                         ),
                         "trust_level": (
                             r.provenance.trust_level
@@ -2398,22 +2311,19 @@ Examples:
                             else "UNKNOWN"
                         ),
                         "trust_score": (
-                            r.provenance.trust_score
-                            if r.provenance
-                            else 0
+                            r.provenance.trust_score if r.provenance else 0
                         ),
                         "has_security_policy": (
-                            r.provenance
-                            .has_security_policy
+                            r.provenance.has_security_policy
                             if r.provenance
                             else False
                         ),
                         "license": (
-                            r.provenance.license
-                            if r.provenance
-                            else None
+                            r.provenance.license if r.provenance else None
                         ),
-                    } if r.provenance else None,
+                    }
+                    if r.provenance
+                    else None,
                     "metadata": {
                         "has_scripts_folder": (
                             r.metadata.has_scripts_folder
@@ -2421,43 +2331,32 @@ Examples:
                             else False
                         ),
                         "has_references_folder": (
-                            r.metadata
-                            .has_references_folder
+                            r.metadata.has_references_folder
                             if r.metadata
                             else False
                         ),
                         "executable_file_count": (
-                            r.metadata
-                            .executable_file_count
+                            r.metadata.executable_file_count
                             if r.metadata
                             else 0
                         ),
                         "has_valid_frontmatter": (
-                            r.metadata
-                            .has_valid_frontmatter
+                            r.metadata.has_valid_frontmatter
                             if r.metadata
                             else False
                         ),
-                    } if r.metadata else None,
+                    }
+                    if r.metadata
+                    else None,
                     "findings": [
                         {
-                            "severity": (
-                                f.severity.value
-                            ),
+                            "severity": (f.severity.value),
                             "category": f.category,
-                            "description": (
-                                f.description
-                            ),
+                            "description": (f.description),
                             "file_path": f.file_path,
-                            "line_number": (
-                                f.line_number
-                            ),
-                            "matched_content": (
-                                f.matched_content
-                            ),
-                            "recommendation": (
-                                f.recommendation
-                            ),
+                            "line_number": (f.line_number),
+                            "matched_content": (f.matched_content),
+                            "recommendation": (f.recommendation),
                         }
                         for f in r.findings
                     ],
@@ -2478,8 +2377,7 @@ Examples:
                 "   No skill directories found!",
             )
             print(  # noqa: T201
-                "   Run with --list-paths to "
-                "see checked locations",
+                "   Run with --list-paths to see checked locations",
             )
             return
 
@@ -2489,40 +2387,31 @@ Examples:
 
         if not all_results:
             print(  # noqa: T201
-                "\n   No skills found in "
-                "scanned locations.",
+                "\n   No skills found in scanned locations.",
             )
             return
 
         for result in all_results:
             print_findings(
-                result, show_all=args.all,
+                result,
+                show_all=args.all,
             )
 
         # Summary
-        total_critical = sum(
-            r.critical_count for r in all_results
-        )
-        total_high = sum(
-            r.high_count for r in all_results
-        )
-        skills_with_issues = sum(
-            1 for r in all_results if r.findings
-        )
+        total_critical = sum(r.critical_count for r in all_results)
+        total_high = sum(r.high_count for r in all_results)
+        skills_with_issues = sum(1 for r in all_results if r.findings)
 
         print(f"\n{'=' * 60}")  # noqa: T201
         print("Summary")  # noqa: T201
         print(  # noqa: T201
-            f"   Total skills scanned: "
-            f"{len(all_results)}",
+            f"   Total skills scanned: {len(all_results)}",
         )
         print(  # noqa: T201
-            f"   Skills with issues: "
-            f"{skills_with_issues}",
+            f"   Skills with issues: {skills_with_issues}",
         )
         print(  # noqa: T201
-            f"   Critical findings: "
-            f"{total_critical}",
+            f"   Critical findings: {total_critical}",
         )
         print(  # noqa: T201
             f"   High findings: {total_high}",
@@ -2536,13 +2425,11 @@ Examples:
             )
         elif total_high > 0:
             print(  # noqa: T201
-                f"\n   {total_high} HIGH severity "
-                "issue(s) found",
+                f"\n   {total_high} HIGH severity issue(s) found",
             )
         elif skills_with_issues == 0:
             print(  # noqa: T201
-                "\n   All skills passed "
-                "security checks",
+                "\n   All skills passed security checks",
             )
 
         print()  # noqa: T201
@@ -2550,8 +2437,7 @@ Examples:
     # Exit code for CI/CD
     if args.fail_on_high:
         total_serious = sum(
-            r.critical_count + r.high_count
-            for r in all_results
+            r.critical_count + r.high_count for r in all_results
         )
         if total_serious > 0:
             sys.exit(1)
