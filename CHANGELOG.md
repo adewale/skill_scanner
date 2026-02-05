@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Test suite** with 175 tests across three tiers:
+  - Tier 1 (`test_infrastructure.py`): Unit tests for dataclasses, trust/risk scoring, AST parsing, whitelists, severity adjustment, provenance/structure analysis
+  - Tier 2 (`test_scanning.py`): Detection tests for all 8 pattern categories (positive + false-positive), integration tests via pyfakefs
+  - Tier 3 (`test_documentation.py`): Cross-references docs against code to catch documentation drift
+- **Developer tooling**:
+  - `pyproject.toml` with project metadata, `[dev]` extras, pytest/coverage/ruff configuration
+  - `.pre-commit-config.yaml` with hooks for ruff lint/format, self-scan security gate, pytest
+  - `.github/workflows/ci.yml` running tests on Python 3.11-3.13, linting, and self-scan
+  - Coverage threshold set to 80%
+- **Remote skill scanning** via `--url` flag to fetch and scan skills from URLs.
+- **Supply chain patterns**: `npx skills add` and `npx add-skill` for detecting remote skill installation (chain-loading).
+- **Prompt injection patterns**: Cross-skill chain-loading delegation, instruction delegation, and prerequisite chain detection.
 - TypeScript `Env` pattern whitelist to avoid false positives from type definitions (`interface Env {}`, `<Env>`, etc.).
 - Localhost dev port whitelist (`3000`, `5173`, `8787`, `8788`, etc.) to suppress false positives on standard dev server URLs.
 - Language-aware severity adjustment: patterns in documentation languages (TypeScript, Python, etc.) are downgraded; patterns in shell languages are boosted.
