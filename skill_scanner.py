@@ -31,7 +31,6 @@ import json
 import os
 import re
 import sys
-import tempfile
 import urllib.parse
 import urllib.request
 from collections.abc import Generator
@@ -42,7 +41,6 @@ from typing import ClassVar
 
 import yaml
 from markdown_it import MarkdownIt
-
 
 # === URL FETCHING UTILITIES ===
 
@@ -66,16 +64,14 @@ def _github_to_raw_url(url: str) -> str:
 
     # Match /user/repo/blob/branch/...path...
     match = re.match(
-        r"^/([^/]+)/([^/]+)/blob/(.+)$", path,
+        r"^/([^/]+)/([^/]+)/blob/(.+)$",
+        path,
     )
     if match:
         user = match.group(1)
         repo = match.group(2)
         rest = match.group(3)
-        return (
-            f"https://raw.githubusercontent.com"
-            f"/{user}/{repo}/{rest}"
-        )
+        return f"https://raw.githubusercontent.com/{user}/{repo}/{rest}"
 
     return url
 
@@ -97,15 +93,17 @@ def fetch_url(url: str) -> tuple[str, str]:
     if "github.com" in url and "/blob/" in url:
         url = _github_to_raw_url(url)
 
-    req = urllib.request.Request(
+    req = urllib.request.Request(  # noqa: S310
         url,
         headers={"User-Agent": "SkillScanner/1.0"},
     )
-    with urllib.request.urlopen(
-        req, timeout=URL_FETCH_TIMEOUT,
+    with urllib.request.urlopen(  # noqa: S310
+        req,
+        timeout=URL_FETCH_TIMEOUT,
     ) as response:
         content = response.read().decode(
-            "utf-8", errors="ignore",
+            "utf-8",
+            errors="ignore",
         )
         return content, response.url
 
@@ -859,7 +857,6 @@ class SkillScanner:
             Severity.CRITICAL,
             "Skill self-modification",
         ),
-
         # Cross-skill chain loading
         (
             r"do\s+everything\s+.{0,40}"
@@ -1165,10 +1162,7 @@ class SkillScanner:
                     (*p, "social_engineering")
                     for p in self.SOCIAL_ENGINEERING_PATTERNS
                 ]
-                + [
-                    (*p, "supply_chain")
-                    for p in self.SUPPLY_CHAIN_PATTERNS
-                ]
+                + [(*p, "supply_chain") for p in self.SUPPLY_CHAIN_PATTERNS]
             )
             for (
                 pattern,
@@ -1972,9 +1966,7 @@ class SkillScanner:
         # Derive a display name from the URL path
         parsed = urllib.parse.urlparse(url)
         url_path = parsed.path.rstrip("/")
-        skill_name = (
-            url_path.split("/")[-1] or "remote-skill"
-        )
+        skill_name = url_path.split("/")[-1] or "remote-skill"
 
         result = ScanResult(
             skill_path=url,
@@ -1989,54 +1981,52 @@ class SkillScanner:
             url,
         )
         if well_known_match:
-            provenance.origin_domain = (
-                well_known_match.group(1)
-            )
+            provenance.origin_domain = well_known_match.group(1)
             provenance.is_well_known = True
             provenance.is_official = True
         result.provenance = provenance
 
         if not provenance.is_official:
-            result.findings.append(Finding(
-                severity=Severity.MEDIUM,
-                category="provenance",
-                description=(
-                    "Skill not served from "
-                    "/.well-known/skills/ - "
-                    "cannot verify official status"
-                ),
-                file_path=url,
-                recommendation=(
-                    "Official skills must be "
-                    "served from the domain's "
-                    "well-known path per RFC"
-                ),
-            ))
+            result.findings.append(
+                Finding(
+                    severity=Severity.MEDIUM,
+                    category="provenance",
+                    description=(
+                        "Skill not served from "
+                        "/.well-known/skills/ - "
+                        "cannot verify official status"
+                    ),
+                    file_path=url,
+                    recommendation=(
+                        "Official skills must be "
+                        "served from the domain's "
+                        "well-known path per RFC"
+                    ),
+                )
+            )
 
         # Fetch the content
         try:
             content, effective_url = fetch_url(url)
         except Exception as exc:  # noqa: BLE001
-            result.findings.append(Finding(
-                severity=Severity.INFO,
-                category="fetch_error",
-                description=(
-                    f"Could not fetch URL: {exc}"
-                ),
-                file_path=url,
-                recommendation=(
-                    "Verify the URL is accessible "
-                    "and try again"
-                ),
-            ))
+            result.findings.append(
+                Finding(
+                    severity=Severity.INFO,
+                    category="fetch_error",
+                    description=(f"Could not fetch URL: {exc}"),
+                    file_path=url,
+                    recommendation=(
+                        "Verify the URL is accessible and try again"
+                    ),
+                )
+            )
             return result
 
         # Determine file type from URL path
         file_path = effective_url.split("?")[0]
-        if not file_path.endswith(".md"):
-            # Assume markdown for SKILL.md-style content
-            if "skill" in file_path.lower():
-                file_path = file_path + ".md"
+        # Assume markdown for SKILL.md-style content
+        if not file_path.endswith(".md") and "skill" in file_path.lower():
+            file_path = file_path + ".md"
 
         # Scan the content
         result.findings.extend(
@@ -2215,10 +2205,7 @@ Examples:
     )
     parser.add_argument(
         "--url",
-        help=(
-            "Fetch and scan a skill from a URL "
-            "(supports GitHub blob URLs)"
-        ),
+        help=("Fetch and scan a skill from a URL (supports GitHub blob URLs)"),
     )
     parser.add_argument(
         "--list-paths",

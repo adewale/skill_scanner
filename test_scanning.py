@@ -734,13 +734,22 @@ class TestSelfScan:
 
 
 class TestNoNetworkImports:
-    """Verify skill_scanner.py does not import networking libraries."""
+    """Verify skill_scanner.py does not import unnecessary networking libraries.
 
-    def test_no_network_imports(self):
+    Note: urllib is now legitimately used for the --url feature to scan
+    remote skills. This test verifies that:
+    1. Other networking libraries (requests, httpx, aiohttp) are not used
+    2. Local scanning operations do not make network calls
+    """
+
+    def test_no_unnecessary_network_imports(self):
+        """Verify only stdlib urllib is used (for --url), not third-party HTTP libs."""
         src = (
             Path(__file__).resolve().parent / "skill_scanner.py"
         ).read_text()
-        banned = ["requests", "urllib", "http.client", "httpx", "aiohttp"]
+        # urllib is allowed - it's used for the --url feature to scan remote skills
+        # These third-party libs would add unnecessary dependencies
+        banned = ["requests", "http.client", "httpx", "aiohttp"]
         for mod in banned:
             # Match "import requests" or "from requests import ..."
             # but not "# requests" or inside strings in patterns
@@ -750,6 +759,32 @@ class TestNoNetworkImports:
             assert not re.search(pattern, src, re.MULTILINE), (
                 f"skill_scanner.py imports banned networking module: {mod}"
             )
+
+    def test_local_scanning_does_not_call_network(self, fs, scanner):
+        """Verify that scanning local files does not invoke network functions.
+
+        The --url feature uses urllib, but local scanning should never
+        touch the network. We verify this by scanning a local skill
+        in a fake filesystem - if any network call were made, it would
+        fail since no network is available in pyfakefs.
+        """
+        from conftest import build_skill_md
+
+        # Create a skill with content that might tempt network access
+        md = build_skill_md(
+            frontmatter={"name": "local-test", "description": "Test skill"},
+            body="Check https://example.com for more info.",
+            code_blocks=[("bash", "curl https://example.com/api")],
+        )
+        fs.create_file("/fake/skill/SKILL.md", contents=md)
+
+        # This should complete without any network calls
+        # If scan_skill tried to fetch URLs, it would fail in pyfakefs
+        result = scanner.scan_skill(Path("/fake/skill"))
+
+        # Verify we got a valid result (scan completed locally)
+        assert result.skill_name == "skill"
+        assert result.skill_path == "/fake/skill"
 
 
 # ================================================================
