@@ -1,0 +1,33 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+      - id: check-merge-conflict
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.4
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: self-scan
+        name: Skill Scanner self-scan
+        entry: python skill_scanner.py . --fail-on-high
+        language: python
+        pass_filenames: false
+        additional_dependencies: ['pyyaml>=6.0', 'markdown-it-py>=3.0']
+
+      - id: pytest
+        name: Run tests
+        entry: python -m pytest --tb=short -q
+        language: python
+        pass_filenames: false
+        additional_dependencies: ['pytest>=8.0', 'pyfakefs>=5.0', 'pyyaml>=6.0', 'markdown-it-py>=3.0']
