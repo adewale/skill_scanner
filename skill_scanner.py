@@ -14,6 +14,7 @@ Based on security research from the ClawHavoc campaign.
 Usage:
     uv run skill_scanner.py
     uv run skill_scanner.py /path/to/skills
+    uv run skill_scanner.py --url https://github.com/user/repo/blob/main/SKILL.md
     uv run skill_scanner.py --json
     uv run skill_scanner.py --fail-on-high
 
@@ -30,6 +31,9 @@ import json
 import os
 import re
 import sys
+import tempfile
+import urllib.parse
+import urllib.request
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from enum import Enum
@@ -38,6 +42,72 @@ from typing import ClassVar
 
 import yaml
 from markdown_it import MarkdownIt
+
+
+# === URL FETCHING UTILITIES ===
+
+# Timeout for HTTP requests in seconds
+URL_FETCH_TIMEOUT = 30
+
+
+def _github_to_raw_url(url: str) -> str:
+    """Convert a GitHub blob/tree URL to raw content.
+
+    Handles URLs like:
+      https://github.com/user/repo/blob/branch/path
+    Converts to:
+      https://raw.githubusercontent.com/user/repo/branch/path
+
+    """
+    parsed = urllib.parse.urlparse(url)
+
+    # Strip query params (e.g., ?plain=1)
+    path = parsed.path
+
+    # Match /user/repo/blob/branch/...path...
+    match = re.match(
+        r"^/([^/]+)/([^/]+)/blob/(.+)$", path,
+    )
+    if match:
+        user = match.group(1)
+        repo = match.group(2)
+        rest = match.group(3)
+        return (
+            f"https://raw.githubusercontent.com"
+            f"/{user}/{repo}/{rest}"
+        )
+
+    return url
+
+
+def fetch_url(url: str) -> tuple[str, str]:
+    """Fetch content from a URL.
+
+    Returns:
+        Tuple of (content, effective_url) where
+        effective_url is the final URL after redirects
+        and GitHub raw conversion.
+
+    Raises:
+        urllib.error.URLError: On network errors.
+        ValueError: On invalid URLs.
+
+    """
+    # Convert GitHub blob URLs to raw
+    if "github.com" in url and "/blob/" in url:
+        url = _github_to_raw_url(url)
+
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "SkillScanner/1.0"},
+    )
+    with urllib.request.urlopen(
+        req, timeout=URL_FETCH_TIMEOUT,
+    ) as response:
+        content = response.read().decode(
+            "utf-8", errors="ignore",
+        )
+        return content, response.url
 
 
 class Severity(Enum):
@@ -811,6 +881,25 @@ class SkillScanner:
             Severity.CRITICAL,
             "Skill self-modification",
         ),
+
+        # Cross-skill chain loading
+        (
+            r"do\s+everything\s+.{0,40}"
+            r"(skill|version)\s+says",
+            Severity.HIGH,
+            "Cross-skill chain-loading delegation",
+        ),
+        (
+            r"follow\s+(all\s+)?instructions\s+"
+            r"(from|in)\s+.{0,30}skill",
+            Severity.HIGH,
+            "Cross-skill instruction delegation",
+        ),
+        (
+            r"run\s+.{0,20}skill\s+first",
+            Severity.MEDIUM,
+            "Skill prerequisite chain",
+        ),
     ]
 
     # Memory poisoning patterns (agent persistence attacks)
@@ -879,6 +968,20 @@ class SkillScanner:
             r"pip\s+install\s+(?!.*==)",
             Severity.LOW,
             "pip install without version",
+        ),
+
+        # Skill installation (chain-loading)
+        (
+            r"npx\s+skills\s+add\s",
+            Severity.HIGH,
+            "Remote skill installation "
+            "(potential chain-loading)",
+        ),
+        (
+            r"npx\s+add-skill\s",
+            Severity.HIGH,
+            "Remote skill installation "
+            "(potential chain-loading)",
         ),
 
         # Downloading binaries
@@ -1082,8 +1185,10 @@ class SkillScanner:
                     block.get("content", ""), "",
                 )
 
-            # Scan prose for prompt injection and
-            # memory poisoning only
+            # Scan prose for prompt injection,
+            # memory poisoning, social engineering,
+            # and supply chain patterns (inline code
+            # like `npx skills add` appears in prose)
             prose_patterns = (
                 [
                     (*p, "prompt_injection")
@@ -1096,6 +1201,10 @@ class SkillScanner:
                 + [
                     (*p, "social_engineering")
                     for p in self.SOCIAL_ENGINEERING_PATTERNS
+                ]
+                + [
+                    (*p, "supply_chain")
+                    for p in self.SUPPLY_CHAIN_PATTERNS
                 ]
             )
             for (
@@ -1896,6 +2005,99 @@ class SkillScanner:
             skill_dir = skill_md.parent
             yield self.scan_skill(skill_dir)
 
+    def scan_url(self, url: str) -> ScanResult:
+        """Fetch a URL and scan its content.
+
+        Supports GitHub blob URLs (auto-converted to raw),
+        raw file URLs, and any URL serving text content.
+
+        The content is scanned in-memory. If the URL
+        points to a SKILL.md inside a directory structure,
+        only the single file is scanned (not siblings).
+
+        Args:
+            url: The URL to fetch and scan.
+
+        Returns:
+            ScanResult with findings from the content.
+
+        """
+        # Derive a display name from the URL path
+        parsed = urllib.parse.urlparse(url)
+        url_path = parsed.path.rstrip("/")
+        skill_name = (
+            url_path.split("/")[-1] or "remote-skill"
+        )
+
+        result = ScanResult(
+            skill_path=url,
+            skill_name=skill_name,
+        )
+
+        # Set provenance from the URL
+        provenance = SkillProvenance(source_url=url)
+        well_known_match = re.search(
+            r"https?://([^/]+)"
+            r"/\.well-known/skills/([^/]+)/",
+            url,
+        )
+        if well_known_match:
+            provenance.origin_domain = (
+                well_known_match.group(1)
+            )
+            provenance.is_well_known = True
+            provenance.is_official = True
+        result.provenance = provenance
+
+        if not provenance.is_official:
+            result.findings.append(Finding(
+                severity=Severity.MEDIUM,
+                category="provenance",
+                description=(
+                    "Skill not served from "
+                    "/.well-known/skills/ - "
+                    "cannot verify official status"
+                ),
+                file_path=url,
+                recommendation=(
+                    "Official skills must be "
+                    "served from the domain's "
+                    "well-known path per RFC"
+                ),
+            ))
+
+        # Fetch the content
+        try:
+            content, effective_url = fetch_url(url)
+        except Exception as exc:  # noqa: BLE001
+            result.findings.append(Finding(
+                severity=Severity.INFO,
+                category="fetch_error",
+                description=(
+                    f"Could not fetch URL: {exc}"
+                ),
+                file_path=url,
+                recommendation=(
+                    "Verify the URL is accessible "
+                    "and try again"
+                ),
+            ))
+            return result
+
+        # Determine file type from URL path
+        file_path = effective_url.split("?")[0]
+        if not file_path.endswith(".md"):
+            # Assume markdown for SKILL.md-style content
+            if "skill" in file_path.lower():
+                file_path = file_path + ".md"
+
+        # Scan the content
+        result.findings.extend(
+            self.scan_content(content, file_path),
+        )
+
+        return result
+
 
 def print_findings(  # noqa: C901, PLR0912
     result: ScanResult,
@@ -2045,6 +2247,7 @@ Default locations scanned (if no path provided):
 Examples:
   %(prog)s
   %(prog)s /path/to/skills
+  %(prog)s --url https://github.com/user/repo/blob/main/skills/my-skill/SKILL.md
   %(prog)s --json
   %(prog)s --fail-on-high
         """,
@@ -2081,6 +2284,13 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--url",
+        help=(
+            "Fetch and scan a skill from a URL "
+            "(supports GitHub blob URLs)"
+        ),
+    )
+    parser.add_argument(
         "--list-paths",
         action="store_true",
         help=(
@@ -2103,7 +2313,13 @@ Examples:
     all_results = []
     scanned_paths = []
 
-    if args.path:
+    if args.url:
+        # Scan a remote URL
+        all_results.append(
+            scanner.scan_url(args.url),
+        )
+        scanned_paths.append(args.url)
+    elif args.path:
         # Scan specific path
         path = Path(args.path)
         if (path / "SKILL.md").exists():
