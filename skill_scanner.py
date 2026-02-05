@@ -57,6 +57,11 @@ def _github_to_raw_url(url: str) -> str:
     Converts to:
       https://raw.githubusercontent.com/user/repo/branch/path
 
+    Also handles tree URLs (directories):
+      https://github.com/user/repo/tree/branch/dir
+    Converts to:
+      https://raw.githubusercontent.com/user/repo/branch/dir/SKILL.md
+
     """
     parsed = urllib.parse.urlparse(url)
 
@@ -74,6 +79,20 @@ def _github_to_raw_url(url: str) -> str:
         rest = match.group(3)
         return f"https://raw.githubusercontent.com/{user}/{repo}/{rest}"
 
+    # Match /user/repo/tree/branch/...dir... (skill directory)
+    match = re.match(
+        r"^/([^/]+)/([^/]+)/tree/(.+)$",
+        path,
+    )
+    if match:
+        user = match.group(1)
+        repo = match.group(2)
+        rest = match.group(3)
+        return (
+            f"https://raw.githubusercontent.com"
+            f"/{user}/{repo}/{rest}/SKILL.md"
+        )
+
     return url
 
 
@@ -90,8 +109,8 @@ def fetch_url(url: str) -> tuple[str, str]:
         ValueError: On invalid URLs.
 
     """
-    # Convert GitHub blob URLs to raw
-    if "github.com" in url and "/blob/" in url:
+    # Convert GitHub blob/tree URLs to raw
+    if "github.com" in url and ("/blob/" in url or "/tree/" in url):
         url = _github_to_raw_url(url)
 
     req = urllib.request.Request(  # noqa: S310
@@ -903,6 +922,53 @@ class SkillScanner:
             Severity.HIGH,
             "Netcat to IP address",
         ),
+        # File upload exfiltration (curl sends local file contents)
+        (
+            r"curl\s+.*--data-binary\s+@",
+            Severity.HIGH,
+            "Curl file upload via --data-binary @file",
+        ),
+        (
+            r"curl\s+.*(-T|--upload-file)\s+",
+            Severity.HIGH,
+            "Curl file upload via --upload-file",
+        ),
+        (
+            r"curl\s+.*-F\s+['\"]?\w+=@",
+            Severity.HIGH,
+            "Curl file upload via multipart form",
+        ),
+        (
+            r"wget\s+.*--post-file",
+            Severity.HIGH,
+            "Wget file upload via --post-file",
+        ),
+        # Symlink-based indirection (disguise sensitive file access)
+        (
+            r"ln\s+-s\s+/etc/",
+            Severity.CRITICAL,
+            "Symlink to /etc system files",
+        ),
+        (
+            r"ln\s+-s\s+~?/?\.ssh/",
+            Severity.CRITICAL,
+            "Symlink to SSH directory",
+        ),
+        (
+            r"ln\s+-s\s+~?/?\.aws/",
+            Severity.CRITICAL,
+            "Symlink to AWS credentials",
+        ),
+        (
+            r"ln\s+-s\s+~?/?\.gnupg/",
+            Severity.CRITICAL,
+            "Symlink to GPG keyring",
+        ),
+        (
+            r"ln\s+-sf?\s+/",
+            Severity.HIGH,
+            "Symlink to absolute path",
+        ),
     ]
 
     # Suspicious URL patterns
@@ -1086,6 +1152,22 @@ class SkillScanner:
             r"trust\s+(me|this|us)",
             Severity.LOW,
             "Trust solicitation",
+        ),
+        # Ownership deception (AI-agent-targeted)
+        (
+            r"not\s+(the\s+)?user'?s?\s+(own\s+)?file",
+            Severity.HIGH,
+            "File ownership deception (agent-targeted)",
+        ),
+        (
+            r"belongs?\s+to\s+(this\s+)?(skill|tool|plugin)",
+            Severity.MEDIUM,
+            "File ownership claim (may disguise sensitive files)",
+        ),
+        (
+            r"(safe|harmless|benign)\s+to\s+(send|upload|post)",
+            Severity.HIGH,
+            "Upload safety reassurance (agent-targeted)",
         ),
     ]
 
