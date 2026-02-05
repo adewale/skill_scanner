@@ -103,6 +103,8 @@ Based on research from:
 | `npx -y` without version pinning | MEDIUM | ✅ Yes | Regex pattern |
 | `npm install` without version | LOW | ✅ Yes | Regex pattern |
 | `pip install` without version | LOW | ✅ Yes | Regex pattern |
+| `npx skills add` remote skill installation | HIGH | ✅ Yes | Regex pattern |
+| `npx add-skill` remote skill installation | HIGH | ✅ Yes | Regex pattern |
 | Downloading Windows executable (.exe) | HIGH | ✅ Yes | Regex pattern |
 | Downloading to bin directory | HIGH | ✅ Yes | Regex pattern |
 | Downloading macOS disk image (.dmg) | HIGH | ✅ Yes | Regex pattern |
@@ -131,6 +133,9 @@ Based on research from:
 | Hidden instructions in Markdown comments | CRITICAL | ✅ Yes | Regex pattern |
 | Self-modifying skill instructions | HIGH | ✅ Yes | Regex pattern |
 | Write to SKILL.md (skill self-modification) | CRITICAL | ✅ Yes | Regex pattern |
+| Cross-skill chain-loading delegation ("do everything skill says") | HIGH | ✅ Yes | Regex pattern |
+| Cross-skill instruction delegation ("follow instructions from skill") | HIGH | ✅ Yes | Regex pattern |
+| Skill prerequisite chain ("run skill first") | MEDIUM | ✅ Yes | Regex pattern |
 | Unusually long descriptions (hiding instructions) | LOW | ✅ Yes | AST length check |
 | Benign-sounding malicious instructions | — | ❌ No | Would need LLM classifier |
 | Long-context instruction hiding | — | ⚠️ Partial | Length check only |
@@ -171,15 +176,15 @@ Based on research from:
 
 | Category | Threats Identified | Scanner Detects | Coverage |
 |----------|-------------------|-----------------|----------|
-| Dangerous Shell Execution | 16 | 16 | **100%** |
-| Data Exfiltration | 18 | 18 | **100%** |
+| Dangerous Shell Execution | 17 | 17 | **100%** |
+| Data Exfiltration | 19 | 19 | **100%** |
 | Suspicious URLs | 14 | 14 | **100%** |
-| Obfuscation | 12 | 12 | **100%** |
-| Supply Chain | 13 | 10 | **77%** |
-| Prompt Injection | 16 | 13 | **81%** |
-| Memory Poisoning | 10 | 8 | **80%** |
+| Obfuscation | 12 | 10 | **83%** |
+| Supply Chain | 15 | 11 | **73%** |
+| Prompt Injection | 19 | 16 | **84%** |
+| Memory Poisoning | 10 | 7 | **70%** |
 | Social Engineering | 10 | 8 | **80%** |
-| **Total** | **109** | **99** | **91%** |
+| **Total** | **116** | **102** | **88%** |
 
 ---
 
