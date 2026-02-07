@@ -1521,7 +1521,12 @@ class SkillScanner:
         # Extract YAML frontmatter
         fm_match = _FRONTMATTER_RE.match(content)
         if fm_match:
-            result["frontmatter"] = _parse_frontmatter(content)
+            try:
+                fm = yaml.safe_load(fm_match.group(1))
+                if fm and isinstance(fm, dict):
+                    result["frontmatter"] = fm
+            except yaml.YAMLError:
+                pass
             content = content[fm_match.end() :]
 
         # Parse markdown to tokens
