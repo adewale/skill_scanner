@@ -200,6 +200,16 @@ MAX_DESCRIPTION_LENGTH = 1000
 LONG_DESCRIPTION_THRESHOLD = 500
 MAX_SAFE_EXECUTABLE_COUNT = 3
 MAX_DISPLAY_LENGTH = 80
+MIN_SUSPICIOUS_ALT_LENGTH = 20
+LONG_ALT_TEXT_THRESHOLD = 150
+
+# Shared regex for executable keywords in hidden contexts
+# (HTML comments, image alt-text). Used by both
+# scan_hidden_content() and scan_image_alt_text().
+HIDDEN_EXEC_KEYWORDS_RE = re.compile(
+    r"(curl|wget|bash|eval|exec|nc\s)",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -1577,13 +1587,34 @@ class SkillScanner:
                 "html_comments",
                 [],
             )
-            if re.search(
-                r"(curl|wget|bash|eval|exec"
-                r"|nc\s)",
-                comment,
-                re.IGNORECASE,
-            )
+            if HIDDEN_EXEC_KEYWORDS_RE.search(comment)
         ]
+
+    # Agent-directed instruction patterns for image
+    # alt-text (e.g., "instructions for the agent",
+    # "run the following command"). These are unique to
+    # alt-text injection and not in the main pattern lists.
+    _IMAGE_ALT_AGENT_DIRECTIVE_RE: ClassVar[re.Pattern] = re.compile(
+        r"(instruction[s]?\s+"
+        r"(for|to)\s+(the\s+)?agent"
+        r"|secret\s+instruction"
+        r"|run\s+(the\s+)?following"
+        r"\s+(command|script)"
+        r"|execute\s+(this|the)"
+        r"\s+(command|script)"
+        r"|you\s+must\s+"
+        r"(run|execute|validate)"
+        r"|validate\s+(the\s+)?"
+        r"(execution\s+)?environment)",
+        re.IGNORECASE,
+    )
+
+    _HIDDEN_CONTENT_RECOMMENDATION: ClassVar[str] = (
+        "Image alt-text is invisible to users "
+        "but processed by AI agents. "
+        "This is a strong indicator of a "
+        "prompt injection attack."
+    )
 
     def scan_image_alt_text(
         self,
@@ -1604,75 +1635,54 @@ class SkillScanner:
 
         """
         findings = []
-        min_suspicious_length = 20
-        long_alt_text_threshold = 150
 
         for image in ast.get("images", []):
             alt = image.get("alt_text", "")
-            if not alt or len(alt) < min_suspicious_length:
+            if not alt or len(alt) < MIN_SUSPICIOUS_ALT_LENGTH:
                 # Short alt-text is normal
                 # ("logo", "icon", etc.)
                 continue
 
             found = False
 
-            # Check for executable commands hidden in
-            # alt-text. Legitimate alt-text should never
-            # contain shell commands.
-            if re.search(
-                r"(curl\s.*\|\s*(ba)?sh"
-                r"|wget\s.*\|\s*(ba)?sh"
-                r"|curl.*\|\s*python"
-                r"|curl.*\|\s*node"
-                r"|bash\s+-[ic]"
-                r"|\beval\s*\("
-                r"|\bexec\s*\("
-                r"|chmod\s+\+s"
-                r"|sudo\s+su"
-                r"|nc\s+-e\s*/bin/"
-                r"|/dev/tcp/)",
-                alt,
-                re.IGNORECASE,
-            ):
-                findings.append(
-                    Finding(
-                        severity=Severity.CRITICAL,
-                        category="prompt_injection",
-                        description=(
-                            "Hidden executable command "
-                            "in image alt-text"
-                        ),
-                        file_path=file_path,
-                        matched_content=alt[:80],
-                        recommendation=(
-                            "Image alt-text contains "
-                            "shell commands invisible "
-                            "to users but processed by "
-                            "AI agents. Strong indicator "
-                            "of prompt injection attack."
-                        ),
+            # Reuse all existing pattern lists. Any match
+            # in alt-text is CRITICAL -- shell commands,
+            # exfiltration paths, obfuscation, etc. have
+            # no legitimate place in image descriptions.
+            for (
+                pattern,
+                _severity,
+                description,
+                _category,
+            ) in self.all_patterns:
+                if re.search(
+                    pattern,
+                    alt,
+                    re.IGNORECASE,
+                ):
+                    findings.append(
+                        Finding(
+                            severity=Severity.CRITICAL,
+                            category="prompt_injection",
+                            description=(
+                                "Hidden in image alt-text"
+                                f": {description}"
+                            ),
+                            file_path=file_path,
+                            matched_content=alt[:80],
+                            recommendation=(
+                                self._HIDDEN_CONTENT_RECOMMENDATION
+                            ),
+                        )
                     )
-                )
-                found = True
+                    found = True
+                    break
 
             # Check for agent-directed instructions in
-            # alt-text (e.g., "instructions for the
+            # alt-text that wouldn't match existing
+            # patterns (e.g., "instructions for the
             # agent", "run the following command")
-            if not found and re.search(
-                r"(instruction[s]?\s+"
-                r"(for|to)\s+(the\s+)?agent"
-                r"|secret\s+instruction"
-                r"|run\s+(the\s+)?following"
-                r"\s+(command|script)"
-                r"|execute\s+(this|the)"
-                r"\s+(command|script)"
-                r"|you\s+must\s+"
-                r"(run|execute|validate)"
-                r"|validate\s+(the\s+)?"
-                r"(execution\s+)?environment)",
-                alt,
-                re.IGNORECASE,
-            ):
+            if not found and self._IMAGE_ALT_AGENT_DIRECTIVE_RE.search(alt):
                 findings.append(
                     Finding(
                         severity=Severity.CRITICAL,
@@ -1684,11 +1694,7 @@ class SkillScanner:
                         file_path=file_path,
                         matched_content=alt[:80],
                         recommendation=(
-                            "Image alt-text contains "
-                            "instructions targeting AI "
-                            "agents. This content is "
-                            "invisible to users but "
-                            "processed by agents."
+                            self._HIDDEN_CONTENT_RECOMMENDATION
                         ),
                     )
                 )
@@ -1697,7 +1703,7 @@ class SkillScanner:
             # Flag suspiciously long alt-text even without
             # known patterns. Normal alt-text is short
             # and descriptive.
-            if not found and len(alt) > long_alt_text_threshold:
+            if not found and len(alt) > LONG_ALT_TEXT_THRESHOLD:
                 findings.append(
                     Finding(
                         severity=Severity.HIGH,
