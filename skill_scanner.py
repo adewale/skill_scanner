@@ -211,6 +211,50 @@ HIDDEN_EXEC_KEYWORDS_RE = re.compile(
     re.IGNORECASE,
 )
 
+# YAML frontmatter regex -- used by parse_skill_ast(),
+# extract_provenance(), and analyze_skill_structure().
+_FRONTMATTER_RE = re.compile(
+    r"^---\s*\n(.*?)\n---\s*\n?",
+    re.DOTALL,
+)
+
+# Well-known skills URL regex (per Cloudflare RFC) --
+# used by extract_provenance() and scan_url().
+_WELL_KNOWN_SKILLS_RE = re.compile(
+    r"https?://([^/]+)/\.well-known/skills/([^/]+)/",
+)
+
+
+def _parse_frontmatter(content: str) -> dict | None:
+    """Extract and parse YAML frontmatter from markdown.
+
+    Returns the parsed dict, or None if no valid
+    frontmatter is found.
+
+    """
+    match = _FRONTMATTER_RE.match(content)
+    if not match:
+        return None
+    try:
+        fm = yaml.safe_load(match.group(1))
+        if fm and isinstance(fm, dict):
+            return fm
+    except yaml.YAMLError:
+        pass
+    return None
+
+
+def _check_well_known_url(
+    url: str,
+    provenance: "SkillProvenance",
+) -> None:
+    """Set official status on provenance if URL is well-known."""
+    match = _WELL_KNOWN_SKILLS_RE.search(url)
+    if match:
+        provenance.origin_domain = match.group(1)
+        provenance.is_well_known = True
+        provenance.is_official = True
+
 
 @dataclass
 class Finding:
@@ -1008,6 +1052,71 @@ class SkillScanner:
         ".env.example",
     ]
 
+    # Extensions for executable files (risk scoring)
+    EXECUTABLE_FILE_EXTENSIONS: ClassVar[set[str]] = {
+        ".sh",
+        ".bash",
+        ".py",
+        ".js",
+        ".ps1",
+        ".bat",
+        ".cmd",
+    }
+
+    # Binary extensions to skip during scanning
+    BINARY_EXTENSIONS: ClassVar[set[str]] = {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".ico",
+        ".woff",
+        ".ttf",
+    }
+
+    @staticmethod
+    def _provenance_finding(
+        provenance: SkillProvenance,
+        file_path: str,
+    ) -> Finding | None:
+        """Build a provenance finding for non-official skills.
+
+        Returns None if the skill is official.
+
+        """
+        if provenance.is_official:
+            return None
+        if provenance.source_url:
+            return Finding(
+                severity=Severity.MEDIUM,
+                category="provenance",
+                description=(
+                    "Skill not served from "
+                    "/.well-known/skills/ - "
+                    "cannot verify official status"
+                ),
+                file_path=file_path,
+                recommendation=(
+                    "Official skills must be "
+                    "served from the domain's "
+                    "well-known path per RFC"
+                ),
+            )
+        return Finding(
+            severity=Severity.MEDIUM,
+            category="provenance",
+            description=(
+                "Unknown origin - skill "
+                "source cannot be verified"
+            ),
+            file_path=file_path,
+            recommendation=(
+                "Only use skills from trusted "
+                "origins (domain's "
+                "/.well-known/skills/)"
+            ),
+        )
+
     def __init__(self, *, verbose: bool = False) -> None:
         """Initialize scanner with pattern lists."""
         self.verbose = verbose
@@ -1413,19 +1522,10 @@ class SkillScanner:
         }
 
         # Extract YAML frontmatter
-        yaml_match = re.match(
-            r"^---\s*\n(.*?)\n---\s*\n?",
-            content,
-            re.DOTALL,
-        )
-        if yaml_match:
-            try:
-                result["frontmatter"] = yaml.safe_load(
-                    yaml_match.group(1),
-                )
-                content = content[yaml_match.end() :]
-            except yaml.YAMLError:
-                pass
+        fm_match = _FRONTMATTER_RE.match(content)
+        if fm_match:
+            result["frontmatter"] = _parse_frontmatter(content)
+            content = content[fm_match.end() :]
 
         # Parse markdown to tokens
         tokens = self.md_parser.parse(content)
@@ -1779,15 +1879,7 @@ class SkillScanner:
 
         # Check if from a well-known URL (official)
         if source_url:
-            well_known_match = re.search(
-                r"https?://([^/]+)"
-                r"/\.well-known/skills/([^/]+)/",
-                source_url,
-            )
-            if well_known_match:
-                provenance.origin_domain = well_known_match.group(1)
-                provenance.is_well_known = True
-                provenance.is_official = True
+            _check_well_known_url(source_url, provenance)
 
         # Try to find git remote URL (informational)
         git_dir = skill_path / ".git"
@@ -1846,22 +1938,14 @@ class SkillScanner:
                     encoding="utf-8",
                     errors="ignore",
                 )
-                yaml_match = re.match(
-                    r"^---\s*\n(.*?)\n---",
-                    content,
-                    re.DOTALL,
-                )
-                if yaml_match:
-                    fm = yaml.safe_load(
-                        yaml_match.group(1),
-                    )
-                    if fm and isinstance(fm, dict):
-                        provenance.license = fm.get("license")
-                        if not provenance.publisher:
-                            provenance.publisher = fm.get("author") or fm.get(
-                                "publisher"
-                            )
-            except (OSError, yaml.YAMLError):
+                fm = _parse_frontmatter(content)
+                if fm:
+                    provenance.license = fm.get("license")
+                    if not provenance.publisher:
+                        provenance.publisher = fm.get(
+                            "author",
+                        ) or fm.get("publisher")
+            except OSError:
                 pass
 
         return provenance
@@ -1881,19 +1965,13 @@ class SkillScanner:
         metadata.has_references_folder = (skill_path / "references").exists()
 
         # Count files
-        executable_extensions = {
-            ".sh",
-            ".bash",
-            ".py",
-            ".js",
-            ".ps1",
-            ".bat",
-            ".cmd",
-        }
         for file_path in skill_path.rglob("*"):
             if file_path.is_file():
                 metadata.skill_file_count += 1
-                if file_path.suffix.lower() in executable_extensions:
+                if (
+                    file_path.suffix.lower()
+                    in self.EXECUTABLE_FILE_EXTENSIONS
+                ):
                     metadata.executable_file_count += 1
 
         # Check frontmatter in SKILL.md
@@ -1904,28 +1982,16 @@ class SkillScanner:
                     encoding="utf-8",
                     errors="ignore",
                 )
-                yaml_match = re.match(
-                    r"^---\s*\n(.*?)\n---",
-                    content,
-                    re.DOTALL,
-                )
-                if yaml_match:
-                    try:
-                        fm = yaml.safe_load(
-                            yaml_match.group(1),
-                        )
-                        if fm and isinstance(fm, dict):
-                            metadata.has_valid_frontmatter = True
-                            desc = fm.get(
-                                "description",
-                                "",
-                            )
-                            metadata.description_length = (
-                                len(desc) if isinstance(desc, str) else 0
-                            )
-                    except yaml.YAMLError:
-                        pass
-            except (OSError, yaml.YAMLError):
+                fm = _parse_frontmatter(content)
+                if fm:
+                    metadata.has_valid_frontmatter = True
+                    desc = fm.get("description", "")
+                    metadata.description_length = (
+                        len(desc)
+                        if isinstance(desc, str)
+                        else 0
+                    )
+            except OSError:
                 pass
 
         return metadata
@@ -1972,41 +2038,12 @@ class SkillScanner:
         result.metadata = structure
 
         # Add provenance-based warnings
-        if not provenance.is_official:
-            if provenance.source_url:
-                result.findings.append(
-                    Finding(
-                        severity=Severity.MEDIUM,
-                        category="provenance",
-                        description=(
-                            "Skill not served from "
-                            "/.well-known/skills/ - "
-                            "cannot verify official status"
-                        ),
-                        file_path=str(skill_path),
-                        recommendation=(
-                            "Official skills must be "
-                            "served from the domain's "
-                            "well-known path per RFC"
-                        ),
-                    )
-                )
-            else:
-                result.findings.append(
-                    Finding(
-                        severity=Severity.MEDIUM,
-                        category="provenance",
-                        description=(
-                            "Unknown origin - skill source cannot be verified"
-                        ),
-                        file_path=str(skill_path),
-                        recommendation=(
-                            "Only use skills from trusted "
-                            "origins (domain's "
-                            "/.well-known/skills/)"
-                        ),
-                    )
-                )
+        prov_finding = self._provenance_finding(
+            provenance,
+            str(skill_path),
+        )
+        if prov_finding:
+            result.findings.append(prov_finding)
 
         # Add structural warnings
         if structure.has_scripts_folder:
@@ -2070,19 +2107,13 @@ class SkillScanner:
             )
 
         # Scan all other files
-        skip_extensions = {
-            ".png",
-            ".jpg",
-            ".jpeg",
-            ".gif",
-            ".ico",
-            ".woff",
-            ".ttf",
-        }
         for file_path in skill_path.rglob("*"):
             if file_path.is_file() and file_path != skill_md:
                 # Skip binary files
-                if file_path.suffix.lower() in skip_extensions:
+                if (
+                    file_path.suffix.lower()
+                    in self.BINARY_EXTENSIONS
+                ):
                     continue
                 result.findings.extend(
                     self.scan_file(file_path),
@@ -2131,35 +2162,15 @@ class SkillScanner:
 
         # Set provenance from the URL
         provenance = SkillProvenance(source_url=url)
-        well_known_match = re.search(
-            r"https?://([^/]+)"
-            r"/\.well-known/skills/([^/]+)/",
-            url,
-        )
-        if well_known_match:
-            provenance.origin_domain = well_known_match.group(1)
-            provenance.is_well_known = True
-            provenance.is_official = True
+        _check_well_known_url(url, provenance)
         result.provenance = provenance
 
-        if not provenance.is_official:
-            result.findings.append(
-                Finding(
-                    severity=Severity.MEDIUM,
-                    category="provenance",
-                    description=(
-                        "Skill not served from "
-                        "/.well-known/skills/ - "
-                        "cannot verify official status"
-                    ),
-                    file_path=url,
-                    recommendation=(
-                        "Official skills must be "
-                        "served from the domain's "
-                        "well-known path per RFC"
-                    ),
-                )
-            )
+        prov_finding = self._provenance_finding(
+            provenance,
+            url,
+        )
+        if prov_finding:
+            result.findings.append(prov_finding)
 
         # Fetch the content
         try:
