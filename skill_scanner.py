@@ -1105,10 +1105,7 @@ class SkillScanner:
         return Finding(
             severity=Severity.MEDIUM,
             category="provenance",
-            description=(
-                "Unknown origin - skill "
-                "source cannot be verified"
-            ),
+            description=("Unknown origin - skill source cannot be verified"),
             file_path=file_path,
             recommendation=(
                 "Only use skills from trusted "
@@ -1765,8 +1762,7 @@ class SkillScanner:
                             severity=Severity.CRITICAL,
                             category="prompt_injection",
                             description=(
-                                "Hidden in image alt-text"
-                                f": {description}"
+                                f"Hidden in image alt-text: {description}"
                             ),
                             file_path=file_path,
                             matched_content=alt[:80],
@@ -1793,9 +1789,7 @@ class SkillScanner:
                         ),
                         file_path=file_path,
                         matched_content=alt[:80],
-                        recommendation=(
-                            self._HIDDEN_CONTENT_RECOMMENDATION
-                        ),
+                        recommendation=(self._HIDDEN_CONTENT_RECOMMENDATION),
                     )
                 )
                 found = True
@@ -1968,10 +1962,7 @@ class SkillScanner:
         for file_path in skill_path.rglob("*"):
             if file_path.is_file():
                 metadata.skill_file_count += 1
-                if (
-                    file_path.suffix.lower()
-                    in self.EXECUTABLE_FILE_EXTENSIONS
-                ):
+                if file_path.suffix.lower() in self.EXECUTABLE_FILE_EXTENSIONS:
                     metadata.executable_file_count += 1
 
         # Check frontmatter in SKILL.md
@@ -1987,9 +1978,7 @@ class SkillScanner:
                     metadata.has_valid_frontmatter = True
                     desc = fm.get("description", "")
                     metadata.description_length = (
-                        len(desc)
-                        if isinstance(desc, str)
-                        else 0
+                        len(desc) if isinstance(desc, str) else 0
                     )
             except OSError:
                 pass
@@ -2110,10 +2099,7 @@ class SkillScanner:
         for file_path in skill_path.rglob("*"):
             if file_path.is_file() and file_path != skill_md:
                 # Skip binary files
-                if (
-                    file_path.suffix.lower()
-                    in self.BINARY_EXTENSIONS
-                ):
+                if file_path.suffix.lower() in self.BINARY_EXTENSIONS:
                     continue
                 result.findings.extend(
                     self.scan_file(file_path),
