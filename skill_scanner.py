@@ -2541,7 +2541,7 @@ Examples:
         ),
     )
     parser.add_argument(
-        "--skill",
+        "--npm",
         help=(
             "Scan a skill by npx ref, e.g. "
             "mattpocock/skills/tdd or "
@@ -2568,12 +2568,12 @@ Examples:
     all_results = []
     scanned_paths = []
 
-    if args.skill:
+    if args.npm:
         # Scan from npx skill ref
         all_results.append(
-            scanner.scan_skill_ref(args.skill),
+            scanner.scan_skill_ref(args.npm),
         )
-        scanned_paths.append(args.skill)
+        scanned_paths.append(args.npm)
     elif args.url:
         # Scan a remote URL
         all_results.append(

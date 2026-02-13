@@ -403,7 +403,7 @@ class TestCLISkillRefFlag:
                 sys.argv = old_argv
 
         help_text = buf.getvalue()
-        assert "--skill" in help_text
+        assert "--npm" in help_text
 
     def test_url_with_tree_url_works(self, monkeypatch):
         """--url with a /tree/ URL should trigger tree scanning."""
