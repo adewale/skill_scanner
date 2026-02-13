@@ -5,7 +5,7 @@ Covers two new capabilities:
    Detect a GitHub *directory* URL, list files via the GitHub
    Contents API, fetch each one, and scan them as a single skill.
 
-2. ``--skill-ref mattpocock/skills/tdd``
+2. ``--skill mattpocock/skills/tdd``
    Parse an npx-style skill reference (``owner/repo/skill``),
    convert it to a GitHub tree URL, and scan the full skill.
 
@@ -381,7 +381,7 @@ class TestScanSkillRef:
 
 
 class TestCLISkillRefFlag:
-    """Verify --skill-ref CLI flag exists and is wired up."""
+    """Verify --skill CLI flag exists and is wired up."""
 
     def test_skill_ref_flag_in_help(self):
         import argparse
@@ -403,7 +403,7 @@ class TestCLISkillRefFlag:
                 sys.argv = old_argv
 
         help_text = buf.getvalue()
-        assert "--skill-ref" in help_text
+        assert "--skill" in help_text
 
     def test_url_with_tree_url_works(self, monkeypatch):
         """--url with a /tree/ URL should trigger tree scanning."""
