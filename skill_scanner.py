@@ -108,6 +108,81 @@ def fetch_url(url: str) -> tuple[str, str]:
         return content, response.url
 
 
+def _parse_github_tree_url(
+    url: str,
+) -> tuple[str, str, str, str] | None:
+    """Parse a GitHub ``/tree/`` directory URL.
+
+    Returns:
+        ``(owner, repo, branch, path)`` or ``None`` if the URL
+        is not a GitHub tree URL.
+
+    """
+    parsed = urllib.parse.urlparse(url)
+    if "github.com" not in parsed.netloc:
+        return None
+
+    path = parsed.path.rstrip("/")
+    match = re.match(
+        r"^/([^/]+)/([^/]+)/tree/([^/]+)/(.+)$",
+        path,
+    )
+    if not match:
+        return None
+
+    return (
+        match.group(1),
+        match.group(2),
+        match.group(3),
+        match.group(4),
+    )
+
+
+def _parse_skill_ref(ref: str) -> tuple[str, str, str]:
+    """Parse an npx skill reference into ``(owner, repo, path)``.
+
+    Accepts either the bare ref (``owner/repo/skill``) or the
+    full ``npx skills add owner/repo/skill`` command.
+
+    Raises:
+        ValueError: If the ref does not contain at least 3 segments.
+
+    """
+    ref = ref.strip()
+
+    # Strip ``npx skills add`` prefix if present
+    npx_prefix = "npx skills add"
+    if ref.lower().startswith(npx_prefix):
+        ref = ref[len(npx_prefix) :].strip()
+
+    parts = ref.split("/")
+    if len(parts) < 3:  # noqa: PLR2004
+        msg = (
+            f"Skill ref must have at least 3 segments "
+            f"(owner/repo/path), got: {ref!r}"
+        )
+        raise ValueError(msg)
+
+    owner = parts[0]
+    repo = parts[1]
+    path = "/".join(parts[2:])
+    return (owner, repo, path)
+
+
+def _skill_ref_to_github_tree_url(
+    owner: str,
+    repo: str,
+    path: str,
+) -> str:
+    """Convert parsed skill ref parts to a GitHub tree URL.
+
+    Assumes ``main`` branch (the standard for skills repos).
+    """
+    return (
+        f"https://github.com/{owner}/{repo}/tree/main/{path}"
+    )
+
+
 class Severity(Enum):
     """Severity levels for scan findings."""
 
@@ -1949,12 +2024,10 @@ class SkillScanner:
     def scan_url(self, url: str) -> ScanResult:
         """Fetch a URL and scan its content.
 
-        Supports GitHub blob URLs (auto-converted to raw),
-        raw file URLs, and any URL serving text content.
-
-        The content is scanned in-memory. If the URL
-        points to a SKILL.md inside a directory structure,
-        only the single file is scanned (not siblings).
+        Supports:
+        - GitHub blob URLs (single file, auto-converted to raw)
+        - GitHub tree URLs (directory -- lists files via API)
+        - Raw file URLs and any URL serving text content
 
         Args:
             url: The URL to fetch and scan.
@@ -1963,6 +2036,13 @@ class SkillScanner:
             ScanResult with findings from the content.
 
         """
+        # Detect GitHub tree (directory) URLs
+        tree_info = _parse_github_tree_url(url)
+        if tree_info:
+            return self._scan_github_tree(url, *tree_info)
+
+        # --- Single-file path (existing behaviour) ---
+
         # Derive a display name from the URL path
         parsed = urllib.parse.urlparse(url)
         url_path = parsed.path.rstrip("/")
@@ -2034,6 +2114,256 @@ class SkillScanner:
         )
 
         return result
+
+    def _scan_github_tree(  # noqa: C901
+        self,
+        url: str,
+        owner: str,
+        repo: str,
+        branch: str,
+        path: str,
+    ) -> ScanResult:
+        """Scan a full skill directory via the GitHub Contents API.
+
+        Fetches the directory listing, then each file's content,
+        and scans everything as a single skill.
+        """
+        skill_name = path.rstrip("/").split("/")[-1]
+
+        result = ScanResult(
+            skill_path=url,
+            skill_name=skill_name,
+        )
+
+        # Provenance from GitHub URL
+        provenance = SkillProvenance(source_url=url)
+        provenance.publisher = owner
+        result.provenance = provenance
+
+        result.findings.append(
+            Finding(
+                severity=Severity.MEDIUM,
+                category="provenance",
+                description=(
+                    "Skill not served from "
+                    "/.well-known/skills/ - "
+                    "cannot verify official status"
+                ),
+                file_path=url,
+                recommendation=(
+                    "Official skills must be "
+                    "served from the domain's "
+                    "well-known path per RFC"
+                ),
+            )
+        )
+
+        # Fetch directory listing from GitHub Contents API
+        api_url = (
+            f"https://api.github.com/repos/"
+            f"{owner}/{repo}/contents/{path}"
+            f"?ref={branch}"
+        )
+        try:
+            listing_json, _ = fetch_url(api_url)
+        except Exception as exc:  # noqa: BLE001
+            result.findings.append(
+                Finding(
+                    severity=Severity.INFO,
+                    category="fetch_error",
+                    description=(
+                        f"Could not fetch directory listing: {exc}"
+                    ),
+                    file_path=api_url,
+                    recommendation=(
+                        "Verify the URL is accessible. "
+                        "GitHub API has rate limits "
+                        "(60 req/hour unauthenticated)."
+                    ),
+                )
+            )
+            return result
+
+        try:
+            entries = json.loads(listing_json)
+        except json.JSONDecodeError:
+            result.findings.append(
+                Finding(
+                    severity=Severity.INFO,
+                    category="fetch_error",
+                    description=(
+                        "GitHub API response was not valid JSON"
+                    ),
+                    file_path=api_url,
+                    recommendation=(
+                        "Check the URL and try again"
+                    ),
+                )
+            )
+            return result
+
+        if not isinstance(entries, list):
+            result.findings.append(
+                Finding(
+                    severity=Severity.INFO,
+                    category="fetch_error",
+                    description=(
+                        "GitHub API did not return a directory listing"
+                    ),
+                    file_path=api_url,
+                    recommendation=(
+                        "Ensure the URL points to a directory, "
+                        "not a single file"
+                    ),
+                )
+            )
+            return result
+
+        # Build metadata from the listing
+        executable_extensions = {
+            ".sh", ".bash", ".py", ".js",
+            ".ps1", ".bat", ".cmd",
+        }
+        metadata = SkillMetadata()
+        for entry in entries:
+            name = entry.get("name", "")
+            entry_type = entry.get("type", "")
+            if entry_type == "dir" and name == "scripts":
+                metadata.has_scripts_folder = True
+            if entry_type == "file":
+                metadata.skill_file_count += 1
+                suffix = (
+                    "." + name.rsplit(".", 1)[-1]
+                    if "." in name
+                    else ""
+                ).lower()
+                if suffix in executable_extensions:
+                    metadata.executable_file_count += 1
+
+        # Fetch and scan each file
+        skip_extensions = {
+            ".png", ".jpg", ".jpeg", ".gif",
+            ".ico", ".woff", ".ttf",
+        }
+        for entry in entries:
+            if entry.get("type") != "file":
+                continue
+            name = entry.get("name", "")
+            download_url = entry.get("download_url")
+            if not download_url:
+                continue
+
+            suffix = (
+                "." + name.rsplit(".", 1)[-1]
+                if "." in name
+                else ""
+            ).lower()
+            if suffix in skip_extensions:
+                continue
+
+            try:
+                content, _ = fetch_url(download_url)
+            except Exception:  # noqa: BLE001
+                continue
+
+            # Parse frontmatter from SKILL.md
+            if name == "SKILL.md":
+                yaml_match = re.match(
+                    r"^---\s*\n(.*?)\n---",
+                    content,
+                    re.DOTALL,
+                )
+                if yaml_match:
+                    try:
+                        fm = yaml.safe_load(
+                            yaml_match.group(1),
+                        )
+                        if fm and isinstance(fm, dict):
+                            metadata.has_valid_frontmatter = True
+                            desc = fm.get("description", "")
+                            metadata.description_length = (
+                                len(desc)
+                                if isinstance(desc, str)
+                                else 0
+                            )
+                    except yaml.YAMLError:
+                        pass
+
+            result.findings.extend(
+                self.scan_content(content, name),
+            )
+
+        result.metadata = metadata
+
+        # Add structural warnings
+        if metadata.has_scripts_folder:
+            result.findings.append(
+                Finding(
+                    severity=Severity.INFO,
+                    category="structure",
+                    description=(
+                        "Skill contains scripts/ folder "
+                        "(2.1x higher vulnerability "
+                        "rate per research)"
+                    ),
+                    file_path=url,
+                    recommendation=(
+                        "Carefully review all scripts "
+                        "before using this skill"
+                    ),
+                )
+            )
+
+        if metadata.executable_file_count > MAX_SAFE_EXECUTABLE_COUNT:
+            result.findings.append(
+                Finding(
+                    severity=Severity.LOW,
+                    category="structure",
+                    description=(
+                        f"Skill contains "
+                        f"{metadata.executable_file_count}"
+                        " executable files"
+                    ),
+                    file_path=url,
+                    recommendation=(
+                        "Review all executable files "
+                        "for malicious content"
+                    ),
+                )
+            )
+
+        if not metadata.has_valid_frontmatter:
+            result.findings.append(
+                Finding(
+                    severity=Severity.LOW,
+                    category="structure",
+                    description=(
+                        "SKILL.md missing or has invalid "
+                        "YAML frontmatter"
+                    ),
+                    file_path=url,
+                    recommendation=(
+                        "Legitimate skills should have "
+                        "proper frontmatter with name "
+                        "and description"
+                    ),
+                )
+            )
+
+        return result
+
+    def scan_skill_ref(self, ref: str) -> ScanResult:
+        """Scan a skill from an npx-style reference.
+
+        Accepts ``owner/repo/skill`` or
+        ``npx skills add owner/repo/skill``.
+
+        Converts to a GitHub tree URL and scans the full
+        skill directory.
+        """
+        owner, repo, path = _parse_skill_ref(ref)
+        url = _skill_ref_to_github_tree_url(owner, repo, path)
+        return self.scan_url(url)
 
 
 def print_findings(  # noqa: C901, PLR0912
@@ -2205,7 +2535,18 @@ Examples:
     )
     parser.add_argument(
         "--url",
-        help=("Fetch and scan a skill from a URL (supports GitHub blob URLs)"),
+        help=(
+            "Fetch and scan a skill from a URL "
+            "(supports GitHub blob and tree URLs)"
+        ),
+    )
+    parser.add_argument(
+        "--skill-ref",
+        help=(
+            "Scan a skill by npx ref, e.g. "
+            "mattpocock/skills/tdd or "
+            "'npx skills add mattpocock/skills/tdd'"
+        ),
     )
     parser.add_argument(
         "--list-paths",
@@ -2227,7 +2568,13 @@ Examples:
     all_results = []
     scanned_paths = []
 
-    if args.url:
+    if args.skill_ref:
+        # Scan from npx skill ref
+        all_results.append(
+            scanner.scan_skill_ref(args.skill_ref),
+        )
+        scanned_paths.append(args.skill_ref)
+    elif args.url:
         # Scan a remote URL
         all_results.append(
             scanner.scan_url(args.url),
