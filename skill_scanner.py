@@ -183,6 +183,105 @@ def _skill_ref_to_github_tree_url(
     )
 
 
+# === SOURCE TYPE CLASSIFICATION ===
+# Matches the six source types recognised by the Vercel ``skills`` CLI:
+# github, gitlab, well-known, huggingface, direct-url, git, local.
+
+
+class SourceType(Enum):
+    """Source types for skill references."""
+
+    GITHUB_SHORTHAND = "github_shorthand"
+    GITHUB_URL = "github_url"
+    GITLAB_URL = "gitlab_url"
+    WELL_KNOWN = "well_known"
+    HUGGINGFACE = "huggingface"
+    DIRECT_URL = "direct_url"
+    LOCAL_PATH = "local_path"
+    GIT_REPO = "git_repo"
+
+
+def _strip_npx_prefix(ref: str) -> str:
+    """Strip ``npx skills add`` prefix if present."""
+    ref = ref.strip()
+    npx_prefix = "npx skills add"
+    if ref.lower().startswith(npx_prefix):
+        ref = ref[len(npx_prefix) :].strip()
+    return ref
+
+
+def _classify_source(ref: str) -> SourceType:
+    """Classify a skill reference into a source type.
+
+    Matches the same source types as the Vercel ``skills`` CLI
+    (``src/source-parser.ts``).
+    """
+    ref = _strip_npx_prefix(ref)
+
+    # Local paths
+    if ref.startswith(("./", "../", "/")):
+        return SourceType.LOCAL_PATH
+    if len(ref) >= 2 and ref[1] == ":":  # noqa: PLR2004
+        return SourceType.LOCAL_PATH
+
+    # URLs
+    if ref.startswith(("http://", "https://")):
+        parsed = urllib.parse.urlparse(ref)
+        host = parsed.netloc.lower()
+        path = parsed.path
+
+        if "github.com" in host:
+            return SourceType.GITHUB_URL
+        if "/-/tree/" in path:
+            return SourceType.GITLAB_URL
+        if "gitlab" in host:
+            return SourceType.GITLAB_URL
+        if "huggingface.co" in host:
+            return SourceType.HUGGINGFACE
+        if path.lower().endswith("/skill.md"):
+            return SourceType.DIRECT_URL
+        if path.endswith(".git"):
+            return SourceType.GIT_REPO
+        # Generic URL: attempt well-known discovery
+        return SourceType.WELL_KNOWN
+
+    # Default: GitHub shorthand (owner/repo/path)
+    return SourceType.GITHUB_SHORTHAND
+
+
+# === GITLAB PARSING ===
+
+
+def _parse_gitlab_tree_url(
+    url: str,
+) -> tuple[str, str, str, str] | None:
+    """Parse a GitLab ``/-/tree/`` directory URL.
+
+    Returns:
+        ``(host, project_path, branch, subpath)``
+        or ``None`` if the URL is not a GitLab tree URL.
+
+    Handles nested groups, self-hosted instances, and
+    custom ports.
+    """
+    parsed = urllib.parse.urlparse(url)
+    path = parsed.path.rstrip("/")
+
+    # Match: /project/path/-/tree/branch[/subpath]
+    match = re.match(
+        r"^(/[^/].+?)/-/tree/([^/]+)(?:/(.+))?$",
+        path,
+    )
+    if not match:
+        return None
+
+    project_path = match.group(1).lstrip("/")
+    branch = match.group(2)
+    subpath = match.group(3) or ""
+
+    return (parsed.netloc, project_path, branch, subpath)
+
+
 class Severity(Enum):
     """Severity levels for scan findings."""
 
@@ -2027,6 +2126,7 @@ class SkillScanner:
         Supports:
         - GitHub blob URLs (single file, auto-converted to raw)
         - GitHub tree URLs (directory -- lists files via API)
+        - GitLab tree URLs (directory -- lists files via API)
         - Raw file URLs and any URL serving text content
 
         Args:
@@ -2040,6 +2140,11 @@ class SkillScanner:
         tree_info = _parse_github_tree_url(url)
         if tree_info:
             return self._scan_github_tree(url, *tree_info)
+
+        # Detect GitLab tree (directory) URLs
+        gitlab_info = _parse_gitlab_tree_url(url)
+        if gitlab_info:
+            return self._scan_gitlab_tree(url, *gitlab_info)
 
         # --- Single-file path (existing behaviour) ---
 
@@ -2352,17 +2457,483 @@ class SkillScanner:
 
         return result
 
+    def _scan_gitlab_tree(  # noqa: C901
+        self,
+        url: str,
+        host: str,
+        project_path: str,
+        branch: str,
+        path: str,
+    ) -> ScanResult:
+        """Scan a full skill directory via the GitLab Repository Tree API."""
+        skill_name = (
+            path.rstrip("/").split("/")[-1]
+            if path
+            else project_path.split("/")[-1]
+        )
+
+        result = ScanResult(skill_path=url, skill_name=skill_name)
+
+        # Provenance from GitLab URL
+        provenance = SkillProvenance(source_url=url)
+        provenance.publisher = project_path.split("/")[0]
+        result.provenance = provenance
+
+        result.findings.append(
+            Finding(
+                severity=Severity.MEDIUM,
+                category="provenance",
+                description=(
+                    "Skill not served from "
+                    "/.well-known/skills/ - "
+                    "cannot verify official status"
+                ),
+                file_path=url,
+                recommendation=(
+                    "Official skills must be "
+                    "served from the domain's "
+                    "well-known path per RFC"
+                ),
+            )
+        )
+
+        # Fetch directory listing from GitLab Repository Tree API
+        encoded_project = urllib.parse.quote(
+            project_path, safe="",
+        )
+        api_url = (
+            f"https://{host}/api/v4/projects/"
+            f"{encoded_project}/repository/tree"
+            f"?path={urllib.parse.quote(path)}"
+            f"&ref={urllib.parse.quote(branch)}"
+        )
+        try:
+            listing_json, _ = fetch_url(api_url)
+        except Exception as exc:  # noqa: BLE001
+            result.findings.append(
+                Finding(
+                    severity=Severity.INFO,
+                    category="fetch_error",
+                    description=(
+                        f"Could not fetch GitLab tree: {exc}"
+                    ),
+                    file_path=api_url,
+                    recommendation=(
+                        "Verify the URL is accessible"
+                    ),
+                )
+            )
+            return result
+
+        try:
+            entries = json.loads(listing_json)
+        except json.JSONDecodeError:
+            result.findings.append(
+                Finding(
+                    severity=Severity.INFO,
+                    category="fetch_error",
+                    description=(
+                        "GitLab API response was not valid JSON"
+                    ),
+                    file_path=api_url,
+                    recommendation=(
+                        "Check the URL and try again"
+                    ),
+                )
+            )
+            return result
+
+        if not isinstance(entries, list):
+            return result
+
+        # Build metadata from the listing
+        executable_extensions = {
+            ".sh", ".bash", ".py", ".js",
+            ".ps1", ".bat", ".cmd",
+        }
+        metadata = SkillMetadata()
+        for entry in entries:
+            name = entry.get("name", "")
+            entry_type = entry.get("type", "")
+            if entry_type == "tree" and name == "scripts":
+                metadata.has_scripts_folder = True
+            if entry_type == "blob":
+                metadata.skill_file_count += 1
+                suffix = (
+                    "." + name.rsplit(".", 1)[-1]
+                    if "." in name
+                    else ""
+                ).lower()
+                if suffix in executable_extensions:
+                    metadata.executable_file_count += 1
+
+        # Fetch and scan each file
+        skip_extensions = {
+            ".png", ".jpg", ".jpeg", ".gif",
+            ".ico", ".woff", ".ttf",
+        }
+        for entry in entries:
+            if entry.get("type") != "blob":
+                continue
+            name = entry.get("name", "")
+            file_path_in_repo = entry.get("path", "")
+
+            suffix = (
+                "." + name.rsplit(".", 1)[-1]
+                if "." in name
+                else ""
+            ).lower()
+            if suffix in skip_extensions:
+                continue
+
+            # GitLab raw file API
+            raw_url = (
+                f"https://{host}/api/v4/projects/"
+                f"{encoded_project}/repository/files/"
+                f"{urllib.parse.quote(file_path_in_repo, safe='')}"
+                f"/raw?ref={urllib.parse.quote(branch)}"
+            )
+
+            try:
+                content, _ = fetch_url(raw_url)
+            except Exception:  # noqa: BLE001
+                continue
+
+            # Parse frontmatter from SKILL.md
+            if name == "SKILL.md":
+                yaml_match = re.match(
+                    r"^---\s*\n(.*?)\n---",
+                    content,
+                    re.DOTALL,
+                )
+                if yaml_match:
+                    try:
+                        fm = yaml.safe_load(
+                            yaml_match.group(1),
+                        )
+                        if fm and isinstance(fm, dict):
+                            metadata.has_valid_frontmatter = True
+                            desc = fm.get("description", "")
+                            metadata.description_length = (
+                                len(desc)
+                                if isinstance(desc, str)
+                                else 0
+                            )
+                    except yaml.YAMLError:
+                        pass
+
+            result.findings.extend(
+                self.scan_content(content, name),
+            )
+
+        result.metadata = metadata
+        return result
+
+    def _scan_well_known(self, url: str) -> ScanResult:
+        """Discover and scan skills via ``/.well-known/skills/``."""
+        parsed = urllib.parse.urlparse(url)
+        base = f"{parsed.scheme}://{parsed.netloc}"
+        index_url = f"{base}/.well-known/skills/index.json"
+
+        # Fetch the discovery index
+        try:
+            index_json, _ = fetch_url(index_url)
+            index = json.loads(index_json)
+        except Exception as exc:  # noqa: BLE001
+            result = ScanResult(
+                skill_path=url,
+                skill_name="well-known",
+            )
+            result.findings.append(
+                Finding(
+                    severity=Severity.INFO,
+                    category="fetch_error",
+                    description=(
+                        f"Could not fetch well-known index: {exc}"
+                    ),
+                    file_path=index_url,
+                    recommendation=(
+                        "Verify the domain serves "
+                        "/.well-known/skills/index.json"
+                    ),
+                )
+            )
+            return result
+
+        skills_list = index.get("skills", [])
+        if not skills_list:
+            result = ScanResult(
+                skill_path=url,
+                skill_name="well-known",
+            )
+            result.findings.append(
+                Finding(
+                    severity=Severity.INFO,
+                    category="structure",
+                    description="No skills found in index.json",
+                    file_path=index_url,
+                    recommendation="Check the index.json format",
+                )
+            )
+            return result
+
+        # Scan the first skill (most common: single-skill sites)
+        first = skills_list[0]
+        skill_name = first.get("name", "unknown")
+        skill_path = first.get("path", "")
+        skill_url = f"{base}{skill_path}"
+
+        result = ScanResult(
+            skill_path=skill_url,
+            skill_name=skill_name,
+        )
+
+        # Well-known provenance is OFFICIAL
+        provenance = SkillProvenance(source_url=skill_url)
+        provenance.origin_domain = parsed.netloc
+        provenance.is_well_known = True
+        provenance.is_official = True
+        result.provenance = provenance
+
+        metadata = SkillMetadata()
+
+        try:
+            content, _ = fetch_url(skill_url)
+        except Exception as exc:  # noqa: BLE001
+            result.findings.append(
+                Finding(
+                    severity=Severity.INFO,
+                    category="fetch_error",
+                    description=(
+                        f"Could not fetch skill: {exc}"
+                    ),
+                    file_path=skill_url,
+                    recommendation=(
+                        "Verify the skill URL is accessible"
+                    ),
+                )
+            )
+            return result
+
+        metadata.skill_file_count = 1
+
+        # Parse frontmatter
+        yaml_match = re.match(
+            r"^---\s*\n(.*?)\n---",
+            content,
+            re.DOTALL,
+        )
+        if yaml_match:
+            try:
+                fm = yaml.safe_load(yaml_match.group(1))
+                if fm and isinstance(fm, dict):
+                    metadata.has_valid_frontmatter = True
+                    desc = fm.get("description", "")
+                    metadata.description_length = (
+                        len(desc)
+                        if isinstance(desc, str)
+                        else 0
+                    )
+            except yaml.YAMLError:
+                pass
+
+        result.metadata = metadata
+        result.findings.extend(
+            self.scan_content(content, "SKILL.md"),
+        )
+
+        return result
+
+    def _scan_huggingface(self, url: str) -> ScanResult:
+        """Scan a skill from a HuggingFace Spaces URL."""
+        parsed = urllib.parse.urlparse(url)
+        path = parsed.path.rstrip("/")
+
+        # Extract owner/repo from /spaces/owner/repo/...
+        match = re.match(
+            r"^/spaces/([^/]+)/([^/]+)",
+            path,
+        )
+        owner = match.group(1) if match else "unknown"
+        repo = match.group(2) if match else "unknown"
+
+        # Normalise to raw URL
+        raw_url = url.replace("/blob/", "/raw/")
+        if "/raw/main/SKILL.md" not in raw_url:
+            # If no SKILL.md in URL, append it
+            raw_url = raw_url.rstrip("/")
+            if not raw_url.endswith("/SKILL.md"):
+                raw_url += "/raw/main/SKILL.md"
+
+        result = ScanResult(
+            skill_path=url,
+            skill_name=f"{owner}/{repo}",
+        )
+
+        provenance = SkillProvenance(source_url=url)
+        provenance.publisher = owner
+        result.provenance = provenance
+
+        result.findings.append(
+            Finding(
+                severity=Severity.MEDIUM,
+                category="provenance",
+                description=(
+                    "Skill not served from "
+                    "/.well-known/skills/ - "
+                    "cannot verify official status"
+                ),
+                file_path=url,
+                recommendation=(
+                    "Official skills must be "
+                    "served from the domain's "
+                    "well-known path per RFC"
+                ),
+            )
+        )
+
+        metadata = SkillMetadata()
+
+        try:
+            content, _ = fetch_url(raw_url)
+        except Exception as exc:  # noqa: BLE001
+            result.findings.append(
+                Finding(
+                    severity=Severity.INFO,
+                    category="fetch_error",
+                    description=(
+                        f"Could not fetch HuggingFace skill: {exc}"
+                    ),
+                    file_path=raw_url,
+                    recommendation=(
+                        "Verify the HuggingFace space URL"
+                    ),
+                )
+            )
+            return result
+
+        metadata.skill_file_count = 1
+
+        # Parse frontmatter for skill name override
+        yaml_match = re.match(
+            r"^---\s*\n(.*?)\n---",
+            content,
+            re.DOTALL,
+        )
+        if yaml_match:
+            try:
+                fm = yaml.safe_load(yaml_match.group(1))
+                if fm and isinstance(fm, dict):
+                    metadata.has_valid_frontmatter = True
+                    if fm.get("name"):
+                        result.skill_name = fm["name"]
+                    desc = fm.get("description", "")
+                    metadata.description_length = (
+                        len(desc)
+                        if isinstance(desc, str)
+                        else 0
+                    )
+            except yaml.YAMLError:
+                pass
+
+        result.metadata = metadata
+        result.findings.extend(
+            self.scan_content(content, "SKILL.md"),
+        )
+
+        return result
+
     def scan_skill_ref(self, ref: str) -> ScanResult:
-        """Scan a skill from an npx-style reference.
+        """Scan a skill from any supported source.
 
-        Accepts ``owner/repo/skill`` or
-        ``npx skills add owner/repo/skill``.
-
-        Converts to a GitHub tree URL and scans the full
-        skill directory.
+        Accepts all formats recognised by the Vercel ``skills``
+        CLI: GitHub shorthand (``owner/repo/skill``), full
+        GitHub/GitLab tree URLs, HuggingFace space URLs,
+        well-known discovery URLs, direct ``skill.md`` URLs,
+        and ``npx skills add`` commands.
         """
+        clean_ref = _strip_npx_prefix(ref)
+        source_type = _classify_source(ref)
+
+        if source_type == SourceType.GITHUB_SHORTHAND:
+            owner, repo, path = _parse_skill_ref(ref)
+            url = _skill_ref_to_github_tree_url(
+                owner, repo, path,
+            )
+            return self.scan_url(url)
+
+        if source_type in (
+            SourceType.GITHUB_URL,
+            SourceType.GITLAB_URL,
+            SourceType.DIRECT_URL,
+        ):
+            return self.scan_url(clean_ref)
+
+        if source_type == SourceType.WELL_KNOWN:
+            return self._scan_well_known(clean_ref)
+
+        if source_type == SourceType.HUGGINGFACE:
+            return self._scan_huggingface(clean_ref)
+
+        if source_type == SourceType.GIT_REPO:
+            result = ScanResult(
+                skill_path=clean_ref,
+                skill_name="git-repo",
+            )
+            result.findings.append(
+                Finding(
+                    severity=Severity.INFO,
+                    category="unsupported",
+                    description=(
+                        "Generic .git repo URLs require "
+                        "clone and are not supported by "
+                        "the scanner. Use "
+                        "``npx skills add`` to install "
+                        "locally, then scan the path."
+                    ),
+                    file_path=clean_ref,
+                    recommendation=(
+                        "Install the skill locally with "
+                        "``npx skills add <url>`` then "
+                        "scan with ``--path``"
+                    ),
+                )
+            )
+            return result
+
+        if source_type == SourceType.LOCAL_PATH:
+            path = Path(clean_ref)
+            if (path / "SKILL.md").exists():
+                return self.scan_skill(path)
+            # Try scanning as directory
+            results = list(self.scan_directory(path))
+            if results:
+                return results[0]
+            result = ScanResult(
+                skill_path=clean_ref,
+                skill_name=path.name,
+            )
+            result.findings.append(
+                Finding(
+                    severity=Severity.INFO,
+                    category="not_found",
+                    description=(
+                        "No SKILL.md found at local path"
+                    ),
+                    file_path=clean_ref,
+                    recommendation=(
+                        "Check the path contains a "
+                        "valid skill directory"
+                    ),
+                )
+            )
+            return result
+
+        # Fallback: try as GitHub shorthand
         owner, repo, path = _parse_skill_ref(ref)
-        url = _skill_ref_to_github_tree_url(owner, repo, path)
+        url = _skill_ref_to_github_tree_url(
+            owner, repo, path,
+        )
         return self.scan_url(url)
 
 
@@ -2541,11 +3112,14 @@ Examples:
         ),
     )
     parser.add_argument(
-        "--npm",
+        "--skill",
         help=(
-            "Scan a skill by npx ref, e.g. "
-            "mattpocock/skills/tdd or "
-            "'npx skills add mattpocock/skills/tdd'"
+            "Scan a skill from any source: "
+            "owner/repo/skill (GitHub shorthand), "
+            "GitHub/GitLab tree URLs, "
+            "HuggingFace space URLs, "
+            "well-known discovery URLs, "
+            "or 'npx skills add owner/repo/skill'"
         ),
     )
     parser.add_argument(
@@ -2568,12 +3142,12 @@ Examples:
     all_results = []
     scanned_paths = []
 
-    if args.npm:
-        # Scan from npx skill ref
+    if args.skill:
+        # Scan from any supported skill source
         all_results.append(
-            scanner.scan_skill_ref(args.npm),
+            scanner.scan_skill_ref(args.skill),
         )
-        scanned_paths.append(args.npm)
+        scanned_paths.append(args.skill)
     elif args.url:
         # Scan a remote URL
         all_results.append(

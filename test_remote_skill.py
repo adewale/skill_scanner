@@ -1,13 +1,15 @@
-"""Tests for remote skill scanning via GitHub tree URLs and npx skill refs.
+"""Tests for remote skill scanning via URLs and skill refs.
 
-Covers two new capabilities:
+Covers:
 1. ``--url https://github.com/owner/repo/tree/branch/path``
    Detect a GitHub *directory* URL, list files via the GitHub
    Contents API, fetch each one, and scan them as a single skill.
 
 2. ``--skill mattpocock/skills/tdd``
-   Parse an npx-style skill reference (``owner/repo/skill``),
-   convert it to a GitHub tree URL, and scan the full skill.
+   Parse skill references in all formats supported by the
+   Vercel ``skills`` CLI: GitHub shorthand, GitHub/GitLab tree
+   URLs, HuggingFace space URLs, well-known discovery URLs,
+   direct ``skill.md`` URLs, and ``npx skills add`` commands.
 
 Tests are split into:
 - **Pure parsing** (no network, no filesystem)
@@ -23,9 +25,13 @@ from conftest import build_skill_md
 from skill_scanner import (
     Severity,
     SkillScanner,
+    SourceType,
+    _classify_source,
     _parse_github_tree_url,
+    _parse_gitlab_tree_url,
     _parse_skill_ref,
     _skill_ref_to_github_tree_url,
+    _strip_npx_prefix,
 )
 
 
@@ -403,7 +409,7 @@ class TestCLISkillRefFlag:
                 sys.argv = old_argv
 
         help_text = buf.getvalue()
-        assert "--npm" in help_text
+        assert "--skill" in help_text
 
     def test_url_with_tree_url_works(self, monkeypatch):
         """--url with a /tree/ URL should trigger tree scanning."""
@@ -439,3 +445,532 @@ class TestCLISkillRefFlag:
             assert data["results"][0]["skill_name"] == "tdd"
         finally:
             sys.argv = old_argv
+
+
+# ================================================================
+# 7. Source type classification
+# ================================================================
+
+
+class TestStripNpxPrefix:
+    """Strip ``npx skills add`` prefix."""
+
+    def test_bare_ref_unchanged(self):
+        assert _strip_npx_prefix("owner/repo/skill") == "owner/repo/skill"
+
+    def test_strips_prefix(self):
+        assert (
+            _strip_npx_prefix("npx skills add owner/repo/skill")
+            == "owner/repo/skill"
+        )
+
+    def test_case_insensitive(self):
+        assert (
+            _strip_npx_prefix("NPX Skills Add owner/repo/skill")
+            == "owner/repo/skill"
+        )
+
+    def test_strips_whitespace(self):
+        assert (
+            _strip_npx_prefix("  npx skills add  owner/repo/skill  ")
+            == "owner/repo/skill"
+        )
+
+
+class TestClassifySource:
+    """Classify skill references into source types."""
+
+    # --- GitHub shorthand ---
+
+    def test_github_shorthand(self):
+        assert (
+            _classify_source("mattpocock/skills/tdd")
+            == SourceType.GITHUB_SHORTHAND
+        )
+
+    def test_github_shorthand_with_npx_prefix(self):
+        assert (
+            _classify_source("npx skills add mattpocock/skills/tdd")
+            == SourceType.GITHUB_SHORTHAND
+        )
+
+    # --- GitHub URLs ---
+
+    def test_github_tree_url(self):
+        assert (
+            _classify_source(
+                "https://github.com/owner/repo/tree/main/skill"
+            )
+            == SourceType.GITHUB_URL
+        )
+
+    def test_github_blob_url(self):
+        assert (
+            _classify_source(
+                "https://github.com/owner/repo/blob/main/SKILL.md"
+            )
+            == SourceType.GITHUB_URL
+        )
+
+    def test_github_repo_root(self):
+        assert (
+            _classify_source("https://github.com/owner/repo")
+            == SourceType.GITHUB_URL
+        )
+
+    # --- GitLab URLs ---
+
+    def test_gitlab_tree_url(self):
+        assert (
+            _classify_source(
+                "https://gitlab.com/group/repo/-/tree/main/skill"
+            )
+            == SourceType.GITLAB_URL
+        )
+
+    def test_gitlab_self_hosted(self):
+        assert (
+            _classify_source(
+                "https://git.company.com/team/repo/-/tree/main/skill"
+            )
+            == SourceType.GITLAB_URL
+        )
+
+    def test_gitlab_nested_groups(self):
+        assert (
+            _classify_source(
+                "https://gitlab.com/group/sub/repo/-/tree/main/skill"
+            )
+            == SourceType.GITLAB_URL
+        )
+
+    # --- HuggingFace URLs ---
+
+    def test_huggingface_space(self):
+        assert (
+            _classify_source(
+                "https://huggingface.co/spaces/owner/repo/blob/main/SKILL.md"
+            )
+            == SourceType.HUGGINGFACE
+        )
+
+    def test_huggingface_raw(self):
+        assert (
+            _classify_source(
+                "https://huggingface.co/spaces/owner/repo/raw/main/SKILL.md"
+            )
+            == SourceType.HUGGINGFACE
+        )
+
+    # --- Direct SKILL.md URLs ---
+
+    def test_direct_skill_md_url(self):
+        assert (
+            _classify_source(
+                "https://example.com/path/to/skill.md"
+            )
+            == SourceType.DIRECT_URL
+        )
+
+    def test_direct_skill_md_uppercase(self):
+        assert (
+            _classify_source(
+                "https://example.com/path/to/SKILL.md"
+            )
+            == SourceType.DIRECT_URL
+        )
+
+    # --- Generic .git URLs ---
+
+    def test_git_repo_url(self):
+        assert (
+            _classify_source(
+                "https://git.mycompany.com/group/repo.git"
+            )
+            == SourceType.GIT_REPO
+        )
+
+    # --- Well-known (generic URL fallback) ---
+
+    def test_well_known_url(self):
+        assert (
+            _classify_source("https://docs.stripe.com")
+            == SourceType.WELL_KNOWN
+        )
+
+    def test_well_known_with_path(self):
+        assert (
+            _classify_source("https://docs.example.com/api")
+            == SourceType.WELL_KNOWN
+        )
+
+    # --- Local paths ---
+
+    def test_local_relative(self):
+        assert (
+            _classify_source("./my-skills/")
+            == SourceType.LOCAL_PATH
+        )
+
+    def test_local_parent(self):
+        assert (
+            _classify_source("../skills")
+            == SourceType.LOCAL_PATH
+        )
+
+    def test_local_absolute(self):
+        assert (
+            _classify_source("/home/user/skills")
+            == SourceType.LOCAL_PATH
+        )
+
+
+# ================================================================
+# 8. GitLab tree URL parsing
+# ================================================================
+
+
+class TestParseGitLabTreeUrl:
+    """Parse GitLab ``/-/tree/`` directory URLs."""
+
+    def test_standard_tree_url(self):
+        result = _parse_gitlab_tree_url(
+            "https://gitlab.com/group/repo/-/tree/main/skill"
+        )
+        assert result == (
+            "gitlab.com", "group/repo", "main", "skill",
+        )
+
+    def test_nested_groups(self):
+        result = _parse_gitlab_tree_url(
+            "https://gitlab.com/group/sub/repo/-/tree/main/skill"
+        )
+        assert result == (
+            "gitlab.com", "group/sub/repo", "main", "skill",
+        )
+
+    def test_self_hosted(self):
+        result = _parse_gitlab_tree_url(
+            "https://git.company.com/team/repo/-/tree/develop/path/to/skill"
+        )
+        assert result == (
+            "git.company.com",
+            "team/repo",
+            "develop",
+            "path/to/skill",
+        )
+
+    def test_no_subpath(self):
+        result = _parse_gitlab_tree_url(
+            "https://gitlab.com/group/repo/-/tree/main"
+        )
+        assert result == (
+            "gitlab.com", "group/repo", "main", "",
+        )
+
+    def test_non_gitlab_url_returns_none(self):
+        result = _parse_gitlab_tree_url(
+            "https://github.com/owner/repo/tree/main/skill"
+        )
+        assert result is None
+
+    def test_gitlab_without_tree_returns_none(self):
+        result = _parse_gitlab_tree_url(
+            "https://gitlab.com/group/repo"
+        )
+        assert result is None
+
+
+# ================================================================
+# 9. Integration: scan GitLab tree
+# ================================================================
+
+
+_MOCK_GITLAB_TREE_API = json.dumps(
+    [
+        {
+            "id": "a",
+            "name": "SKILL.md",
+            "type": "blob",
+            "path": "skill/SKILL.md",
+        },
+        {
+            "id": "b",
+            "name": "guide.md",
+            "type": "blob",
+            "path": "skill/guide.md",
+        },
+    ]
+)
+
+
+def _mock_fetch_url_gitlab(url):
+    """Return canned responses for GitLab API URLs."""
+    if "/repository/tree" in url:
+        return (_MOCK_GITLAB_TREE_API, url)
+    if "/repository/files/" in url and "SKILL.md" in url:
+        return (
+            build_skill_md(
+                frontmatter={"name": "gl-skill", "description": "test"},
+                body="# GitLab Skill",
+            ),
+            url,
+        )
+    if "/repository/files/" in url and "guide.md" in url:
+        return ("# Guide\n\nSome guide content.\n", url)
+    msg = f"unexpected GitLab URL: {url}"
+    raise ValueError(msg)
+
+
+class TestScanGitLabTree:
+    """Integration tests for GitLab tree scanning."""
+
+    def test_scans_gitlab_tree(self, monkeypatch):
+        import skill_scanner
+
+        monkeypatch.setattr(
+            skill_scanner, "fetch_url", _mock_fetch_url_gitlab,
+        )
+        scanner = SkillScanner()
+        result = scanner.scan_url(
+            "https://gitlab.com/group/repo/-/tree/main/skill"
+        )
+        assert result.skill_name == "skill"
+        assert result.provenance is not None
+        assert result.provenance.publisher == "group"
+
+    def test_gitlab_metadata(self, monkeypatch):
+        import skill_scanner
+
+        monkeypatch.setattr(
+            skill_scanner, "fetch_url", _mock_fetch_url_gitlab,
+        )
+        scanner = SkillScanner()
+        result = scanner.scan_url(
+            "https://gitlab.com/group/repo/-/tree/main/skill"
+        )
+        assert result.metadata is not None
+        assert result.metadata.skill_file_count == 2
+        assert result.metadata.has_valid_frontmatter is True
+
+
+# ================================================================
+# 10. Integration: scan well-known discovery URL
+# ================================================================
+
+
+_MOCK_WELL_KNOWN_INDEX = json.dumps(
+    {
+        "skills": [
+            {
+                "name": "api-guide",
+                "path": "/.well-known/skills/api-guide/SKILL.md",
+            },
+        ],
+    }
+)
+
+
+def _mock_fetch_url_well_known(url):
+    """Return canned responses for well-known discovery."""
+    if "/.well-known/skills/index.json" in url:
+        return (_MOCK_WELL_KNOWN_INDEX, url)
+    if "/.well-known/skills/api-guide/SKILL.md" in url:
+        return (
+            build_skill_md(
+                frontmatter={
+                    "name": "api-guide",
+                    "description": "API guide skill",
+                },
+                body="# API Guide\n\nHow to use the API.\n",
+            ),
+            url,
+        )
+    msg = f"unexpected well-known URL: {url}"
+    raise ValueError(msg)
+
+
+class TestScanWellKnown:
+    """Integration tests for well-known discovery scanning."""
+
+    def test_discovers_and_scans(self, monkeypatch):
+        import skill_scanner
+
+        monkeypatch.setattr(
+            skill_scanner, "fetch_url", _mock_fetch_url_well_known,
+        )
+        scanner = SkillScanner()
+        result = scanner.scan_skill_ref("https://docs.example.com")
+        assert result.skill_name == "api-guide"
+        assert result.provenance is not None
+        assert result.provenance.is_well_known is True
+        assert result.provenance.is_official is True
+        assert result.provenance.origin_domain == "docs.example.com"
+
+    def test_well_known_metadata(self, monkeypatch):
+        import skill_scanner
+
+        monkeypatch.setattr(
+            skill_scanner, "fetch_url", _mock_fetch_url_well_known,
+        )
+        scanner = SkillScanner()
+        result = scanner.scan_skill_ref("https://docs.example.com")
+        assert result.metadata is not None
+        assert result.metadata.has_valid_frontmatter is True
+
+
+# ================================================================
+# 11. Integration: scan HuggingFace space URL
+# ================================================================
+
+
+def _mock_fetch_url_huggingface(url):
+    """Return canned responses for HuggingFace URLs."""
+    if "raw/main/SKILL.md" in url or "blob/main/SKILL.md" in url:
+        return (
+            build_skill_md(
+                frontmatter={
+                    "name": "hf-skill",
+                    "description": "A HuggingFace skill",
+                },
+                body="# HF Skill\n\nFrom HuggingFace.\n",
+            ),
+            url.replace("/blob/", "/raw/"),
+        )
+    msg = f"unexpected HuggingFace URL: {url}"
+    raise ValueError(msg)
+
+
+class TestScanHuggingFace:
+    """Integration tests for HuggingFace space scanning."""
+
+    def test_scans_huggingface_space(self, monkeypatch):
+        import skill_scanner
+
+        monkeypatch.setattr(
+            skill_scanner, "fetch_url", _mock_fetch_url_huggingface,
+        )
+        scanner = SkillScanner()
+        result = scanner.scan_skill_ref(
+            "https://huggingface.co/spaces/owner/myrepo"
+            "/blob/main/SKILL.md"
+        )
+        assert result.skill_name == "hf-skill"
+        assert result.provenance is not None
+        assert result.provenance.publisher == "owner"
+
+    def test_huggingface_trust_unverified(self, monkeypatch):
+        import skill_scanner
+
+        monkeypatch.setattr(
+            skill_scanner, "fetch_url", _mock_fetch_url_huggingface,
+        )
+        scanner = SkillScanner()
+        result = scanner.scan_skill_ref(
+            "https://huggingface.co/spaces/owner/myrepo"
+            "/raw/main/SKILL.md"
+        )
+        assert result.provenance.trust_level == "UNVERIFIED"
+
+
+# ================================================================
+# 12. Unified scan_skill_ref dispatches all source types
+# ================================================================
+
+
+class TestScanSkillRefDispatches:
+    """scan_skill_ref routes to the right handler."""
+
+    def test_github_shorthand_dispatches(self, monkeypatch):
+        import skill_scanner
+
+        monkeypatch.setattr(
+            skill_scanner, "fetch_url", _mock_fetch_url,
+        )
+        scanner = SkillScanner()
+        result = scanner.scan_skill_ref("mattpocock/skills/tdd")
+        assert result.skill_name == "tdd"
+
+    def test_github_url_dispatches(self, monkeypatch):
+        import skill_scanner
+
+        monkeypatch.setattr(
+            skill_scanner, "fetch_url", _mock_fetch_url,
+        )
+        scanner = SkillScanner()
+        result = scanner.scan_skill_ref(
+            "https://github.com/mattpocock/skills/tree/main/tdd"
+        )
+        assert result.skill_name == "tdd"
+
+    def test_gitlab_url_dispatches(self, monkeypatch):
+        import skill_scanner
+
+        monkeypatch.setattr(
+            skill_scanner, "fetch_url", _mock_fetch_url_gitlab,
+        )
+        scanner = SkillScanner()
+        result = scanner.scan_skill_ref(
+            "https://gitlab.com/group/repo/-/tree/main/skill"
+        )
+        assert result.skill_name == "skill"
+
+    def test_well_known_dispatches(self, monkeypatch):
+        import skill_scanner
+
+        monkeypatch.setattr(
+            skill_scanner, "fetch_url", _mock_fetch_url_well_known,
+        )
+        scanner = SkillScanner()
+        result = scanner.scan_skill_ref(
+            "https://docs.example.com"
+        )
+        assert result.skill_name == "api-guide"
+
+    def test_huggingface_dispatches(self, monkeypatch):
+        import skill_scanner
+
+        monkeypatch.setattr(
+            skill_scanner, "fetch_url", _mock_fetch_url_huggingface,
+        )
+        scanner = SkillScanner()
+        result = scanner.scan_skill_ref(
+            "https://huggingface.co/spaces/owner/myrepo"
+            "/raw/main/SKILL.md"
+        )
+        assert result.skill_name == "hf-skill"
+
+    def test_direct_url_dispatches(self, monkeypatch):
+        import skill_scanner
+
+        monkeypatch.setattr(
+            skill_scanner, "fetch_url",
+            lambda url: (
+                build_skill_md(
+                    frontmatter={
+                        "name": "direct",
+                        "description": "direct skill",
+                    },
+                    body="# Direct",
+                ),
+                url,
+            ),
+        )
+        scanner = SkillScanner()
+        result = scanner.scan_skill_ref(
+            "https://example.com/path/to/skill.md"
+        )
+        # scan_url derives name from URL path
+        assert result.skill_name == "skill.md"
+
+    def test_git_repo_unsupported(self):
+        scanner = SkillScanner()
+        result = scanner.scan_skill_ref(
+            "https://git.company.com/group/repo.git"
+        )
+        # Should return a result with an INFO finding about unsupported
+        assert any(
+            "clone" in f.description.lower()
+            or "not supported" in f.description.lower()
+            for f in result.findings
+        )
