@@ -207,16 +207,26 @@ class TestParseSkillRef:
         result = _parse_skill_ref("owner/repo/path/to/skill")
         assert result == ("owner", "repo", "path/to/skill")
 
+    def test_two_segment_repo_level(self):
+        result = _parse_skill_ref("ibelick/ui-skills")
+        assert result == ("ibelick", "ui-skills", "")
+
+    def test_two_segment_with_npx_prefix(self):
+        result = _parse_skill_ref(
+            "npx skills add ibelick/ui-skills"
+        )
+        assert result == ("ibelick", "ui-skills", "")
+
     def test_too_few_segments_raises(self):
-        with pytest.raises(ValueError, match="at least 3"):
-            _parse_skill_ref("owner/repo")
+        with pytest.raises(ValueError, match="at least 2"):
+            _parse_skill_ref("owner")
 
     def test_empty_raises(self):
-        with pytest.raises(ValueError, match="at least 3"):
+        with pytest.raises(ValueError, match="at least 2"):
             _parse_skill_ref("")
 
     def test_with_npx_skills_add_prefix_only_raises(self):
-        with pytest.raises(ValueError, match="at least 3"):
+        with pytest.raises(ValueError, match="at least 2"):
             _parse_skill_ref("npx skills add")
 
     def test_whitespace_stripped(self):
@@ -246,6 +256,14 @@ class TestSkillRefToGitHubTreeUrl:
         )
         assert url == (
             "https://github.com/owner/repo/tree/main/path/to/skill"
+        )
+
+    def test_empty_path_gives_repo_root(self):
+        url = _skill_ref_to_github_tree_url(
+            "ibelick", "ui-skills", ""
+        )
+        assert url == (
+            "https://github.com/ibelick/ui-skills/tree/main"
         )
 
 
@@ -377,8 +395,156 @@ class TestScanSkillRef:
 
     def test_scan_skill_ref_invalid_raises(self):
         scanner = SkillScanner()
-        with pytest.raises(ValueError, match="at least 3"):
-            scanner.scan_skill_ref("owner/repo")
+        with pytest.raises(ValueError, match="at least 2"):
+            scanner.scan_skill_ref("owner")
+
+
+# ================================================================
+# 5b. Repo-level scanning (owner/repo with no subpath)
+# ================================================================
+
+# Mock Git Trees API response simulating ibelick/ui-skills layout
+_MOCK_GIT_TREES_RESPONSE = json.dumps(
+    {
+        "sha": "abc123",
+        "tree": [
+            {"path": "README.md", "type": "blob"},
+            {"path": "skills", "type": "tree"},
+            {"path": "skills/baseline-ui", "type": "tree"},
+            {
+                "path": "skills/baseline-ui/SKILL.md",
+                "type": "blob",
+            },
+            {"path": "skills/fixing-a11y", "type": "tree"},
+            {
+                "path": "skills/fixing-a11y/SKILL.md",
+                "type": "blob",
+            },
+        ],
+    }
+)
+
+# Contents API responses for each subdirectory
+_MOCK_BASELINE_UI_LISTING = json.dumps(
+    [
+        {
+            "name": "SKILL.md",
+            "path": "skills/baseline-ui/SKILL.md",
+            "type": "file",
+            "download_url": (
+                "https://raw.githubusercontent.com"
+                "/ibelick/ui-skills/main"
+                "/skills/baseline-ui/SKILL.md"
+            ),
+        },
+    ]
+)
+
+_MOCK_FIXING_A11Y_LISTING = json.dumps(
+    [
+        {
+            "name": "SKILL.md",
+            "path": "skills/fixing-a11y/SKILL.md",
+            "type": "file",
+            "download_url": (
+                "https://raw.githubusercontent.com"
+                "/ibelick/ui-skills/main"
+                "/skills/fixing-a11y/SKILL.md"
+            ),
+        },
+    ]
+)
+
+
+def _mock_fetch_url_repo(url):
+    """Return canned responses for repo-level scanning."""
+    if "/git/trees/" in url:
+        return (_MOCK_GIT_TREES_RESPONSE, url)
+    if "api.github.com" in url and "baseline-ui" in url:
+        return (_MOCK_BASELINE_UI_LISTING, url)
+    if "api.github.com" in url and "fixing-a11y" in url:
+        return (_MOCK_FIXING_A11Y_LISTING, url)
+    if url.endswith("baseline-ui/SKILL.md"):
+        return (
+            build_skill_md(
+                frontmatter={
+                    "name": "baseline-ui",
+                    "description": "UI baseline",
+                },
+                body="# Baseline UI",
+            ),
+            url,
+        )
+    if url.endswith("fixing-a11y/SKILL.md"):
+        return (
+            build_skill_md(
+                frontmatter={
+                    "name": "fixing-a11y",
+                    "description": "Accessibility",
+                },
+                body="# Fixing A11y",
+            ),
+            url,
+        )
+    msg = f"unexpected repo URL: {url}"
+    raise ValueError(msg)
+
+
+class TestScanGitHubRepo:
+    """Repo-level scanning discovers and audits all skills."""
+
+    def test_discovers_multiple_skills(self, monkeypatch):
+        import skill_scanner
+
+        monkeypatch.setattr(
+            skill_scanner, "fetch_url", _mock_fetch_url_repo,
+        )
+        scanner = SkillScanner()
+        result = scanner.scan_skill_ref("ibelick/ui-skills")
+        assert "2 skills" in result.skill_name
+        assert result.provenance.publisher == "ibelick"
+
+    def test_lists_skill_names(self, monkeypatch):
+        import skill_scanner
+
+        monkeypatch.setattr(
+            skill_scanner, "fetch_url", _mock_fetch_url_repo,
+        )
+        scanner = SkillScanner()
+        result = scanner.scan_skill_ref("ibelick/ui-skills")
+        info_descriptions = [
+            f.description
+            for f in result.findings
+            if f.category == "structure"
+        ]
+        combined = " ".join(info_descriptions)
+        assert "baseline-ui" in combined
+        assert "fixing-a11y" in combined
+
+    def test_metadata_aggregated(self, monkeypatch):
+        import skill_scanner
+
+        monkeypatch.setattr(
+            skill_scanner, "fetch_url", _mock_fetch_url_repo,
+        )
+        scanner = SkillScanner()
+        result = scanner.scan_skill_ref("ibelick/ui-skills")
+        assert result.metadata is not None
+        # 2 skills × 1 file each = 2 total files
+        assert result.metadata.skill_file_count == 2
+        assert result.metadata.has_valid_frontmatter is True
+
+    def test_via_npx_prefix(self, monkeypatch):
+        import skill_scanner
+
+        monkeypatch.setattr(
+            skill_scanner, "fetch_url", _mock_fetch_url_repo,
+        )
+        scanner = SkillScanner()
+        result = scanner.scan_skill_ref(
+            "npx skills add ibelick/ui-skills"
+        )
+        assert "2 skills" in result.skill_name
 
 
 # ================================================================

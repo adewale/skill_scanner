@@ -124,7 +124,7 @@ def _parse_github_tree_url(
 
     path = parsed.path.rstrip("/")
     match = re.match(
-        r"^/([^/]+)/([^/]+)/tree/([^/]+)/(.+)$",
+        r"^/([^/]+)/([^/]+)/tree/([^/]+)(?:/(.+))?$",
         path,
     )
     if not match:
@@ -134,18 +134,20 @@ def _parse_github_tree_url(
         match.group(1),
         match.group(2),
         match.group(3),
-        match.group(4),
+        match.group(4) or "",
     )
 
 
 def _parse_skill_ref(ref: str) -> tuple[str, str, str]:
     """Parse an npx skill reference into ``(owner, repo, path)``.
 
-    Accepts either the bare ref (``owner/repo/skill``) or the
-    full ``npx skills add owner/repo/skill`` command.
+    Accepts:
+    - ``owner/repo`` (repo root -- discovers skills automatically)
+    - ``owner/repo/skill`` (specific subdirectory)
+    - ``npx skills add owner/repo[/skill]``
 
     Raises:
-        ValueError: If the ref does not contain at least 3 segments.
+        ValueError: If the ref does not contain at least 2 segments.
 
     """
     ref = ref.strip()
@@ -156,16 +158,16 @@ def _parse_skill_ref(ref: str) -> tuple[str, str, str]:
         ref = ref[len(npx_prefix) :].strip()
 
     parts = ref.split("/")
-    if len(parts) < 3:  # noqa: PLR2004
+    if len(parts) < 2:  # noqa: PLR2004
         msg = (
-            f"Skill ref must have at least 3 segments "
-            f"(owner/repo/path), got: {ref!r}"
+            f"Skill ref must have at least 2 segments "
+            f"(owner/repo), got: {ref!r}"
         )
         raise ValueError(msg)
 
     owner = parts[0]
     repo = parts[1]
-    path = "/".join(parts[2:])
+    path = "/".join(parts[2:]) if len(parts) > 2 else ""  # noqa: PLR2004
     return (owner, repo, path)
 
 
@@ -178,9 +180,11 @@ def _skill_ref_to_github_tree_url(
 
     Assumes ``main`` branch (the standard for skills repos).
     """
-    return (
-        f"https://github.com/{owner}/{repo}/tree/main/{path}"
-    )
+    if path:
+        return (
+            f"https://github.com/{owner}/{repo}/tree/main/{path}"
+        )
+    return f"https://github.com/{owner}/{repo}/tree/main"
 
 
 # === SOURCE TYPE CLASSIFICATION ===
@@ -2139,6 +2143,12 @@ class SkillScanner:
         # Detect GitHub tree (directory) URLs
         tree_info = _parse_github_tree_url(url)
         if tree_info:
+            owner, repo, branch, path = tree_info
+            if not path:
+                # Repo root: use recursive discovery
+                return self._scan_github_repo(
+                    owner, repo, branch,
+                )
             return self._scan_github_tree(url, *tree_info)
 
         # Detect GitLab tree (directory) URLs
@@ -2454,6 +2464,191 @@ class SkillScanner:
                     ),
                 )
             )
+
+        return result
+
+    def _scan_github_repo(  # noqa: C901
+        self,
+        owner: str,
+        repo: str,
+        branch: str = "main",
+    ) -> ScanResult:
+        """Scan all skills in a GitHub repo using the Git Trees API.
+
+        Discovers all ``SKILL.md`` files recursively and scans
+        each skill directory.  Returns a combined result.
+        """
+        repo_url = f"https://github.com/{owner}/{repo}"
+        result = ScanResult(
+            skill_path=repo_url,
+            skill_name=repo,
+        )
+
+        provenance = SkillProvenance(source_url=repo_url)
+        provenance.publisher = owner
+        result.provenance = provenance
+
+        result.findings.append(
+            Finding(
+                severity=Severity.MEDIUM,
+                category="provenance",
+                description=(
+                    "Skill not served from "
+                    "/.well-known/skills/ - "
+                    "cannot verify official status"
+                ),
+                file_path=repo_url,
+                recommendation=(
+                    "Official skills must be "
+                    "served from the domain's "
+                    "well-known path per RFC"
+                ),
+            )
+        )
+
+        # Use Git Trees API for recursive listing
+        tree_api_url = (
+            f"https://api.github.com/repos/"
+            f"{owner}/{repo}/git/trees/"
+            f"{branch}?recursive=1"
+        )
+        try:
+            tree_json, _ = fetch_url(tree_api_url)
+        except Exception as exc:  # noqa: BLE001
+            result.findings.append(
+                Finding(
+                    severity=Severity.INFO,
+                    category="fetch_error",
+                    description=(
+                        f"Could not fetch repo tree: {exc}"
+                    ),
+                    file_path=tree_api_url,
+                    recommendation=(
+                        "Verify the repo exists and "
+                        "is public. GitHub API has "
+                        "rate limits (60 req/hour "
+                        "unauthenticated)."
+                    ),
+                )
+            )
+            return result
+
+        try:
+            tree_data = json.loads(tree_json)
+        except json.JSONDecodeError:
+            result.findings.append(
+                Finding(
+                    severity=Severity.INFO,
+                    category="fetch_error",
+                    description=(
+                        "Git Trees API response was "
+                        "not valid JSON"
+                    ),
+                    file_path=tree_api_url,
+                    recommendation="Check the URL and try again",
+                )
+            )
+            return result
+
+        tree_entries = tree_data.get("tree", [])
+
+        # Find all SKILL.md files
+        skill_dirs = []
+        for entry in tree_entries:
+            entry_path = entry.get("path", "")
+            if (
+                entry_path.endswith("/SKILL.md")
+                or entry_path == "SKILL.md"
+            ):
+                parent = (
+                    entry_path.rsplit("/", 1)[0]
+                    if "/" in entry_path
+                    else ""
+                )
+                skill_dirs.append(parent)
+
+        if not skill_dirs:
+            result.findings.append(
+                Finding(
+                    severity=Severity.INFO,
+                    category="structure",
+                    description=(
+                        "No SKILL.md files found in "
+                        "repository"
+                    ),
+                    file_path=repo_url,
+                    recommendation=(
+                        "Verify this is a skills repo"
+                    ),
+                )
+            )
+            return result
+
+        # Scan each skill directory via the existing
+        # tree scanner
+        sub_results = []
+        for skill_dir in skill_dirs:
+            tree_url = (
+                f"https://github.com/{owner}/{repo}"
+                f"/tree/{branch}/{skill_dir}"
+            )
+            sub = self._scan_github_tree(
+                tree_url, owner, repo, branch, skill_dir,
+            )
+            sub_results.append(sub)
+
+        # Merge sub-results into the main result
+        if len(sub_results) == 1:
+            only = sub_results[0]
+            only.skill_path = repo_url
+            return only
+
+        # Multiple skills: combine findings and metadata
+        result.skill_name = (
+            f"{repo} ({len(sub_results)} skills)"
+        )
+        total_files = 0
+        total_executables = 0
+        any_scripts = False
+        any_valid_fm = False
+        for sub in sub_results:
+            for f in sub.findings:
+                # Skip duplicate provenance findings
+                if f.category == "provenance":
+                    continue
+                result.findings.append(f)
+            if sub.metadata:
+                total_files += sub.metadata.skill_file_count
+                total_executables += (
+                    sub.metadata.executable_file_count
+                )
+                if sub.metadata.has_scripts_folder:
+                    any_scripts = True
+                if sub.metadata.has_valid_frontmatter:
+                    any_valid_fm = True
+
+        result.metadata = SkillMetadata(
+            skill_file_count=total_files,
+            executable_file_count=total_executables,
+            has_scripts_folder=any_scripts,
+            has_valid_frontmatter=any_valid_fm,
+        )
+
+        # List discovered skills in an INFO finding
+        skill_names = [s.skill_name for s in sub_results]
+        result.findings.append(
+            Finding(
+                severity=Severity.INFO,
+                category="structure",
+                description=(
+                    f"Repository contains "
+                    f"{len(sub_results)} skills: "
+                    + ", ".join(skill_names)
+                ),
+                file_path=repo_url,
+                recommendation="Review each skill individually",
+            )
+        )
 
         return result
 
@@ -2857,6 +3052,9 @@ class SkillScanner:
 
         if source_type == SourceType.GITHUB_SHORTHAND:
             owner, repo, path = _parse_skill_ref(ref)
+            if not path:
+                # Repo-level ref: discover all skills
+                return self._scan_github_repo(owner, repo)
             url = _skill_ref_to_github_tree_url(
                 owner, repo, path,
             )
