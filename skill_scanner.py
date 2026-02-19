@@ -88,14 +88,23 @@ def fetch_url(url: str) -> tuple[str, str]:
         urllib.error.URLError: On network errors.
         ValueError: On invalid URLs.
 
+    Supports ``GITHUB_TOKEN`` environment variable for
+    authenticated GitHub API requests (5 000 req/hr vs 60).
     """
     # Convert GitHub blob URLs to raw
     if "github.com" in url and "/blob/" in url:
         url = _github_to_raw_url(url)
 
+    headers = {"User-Agent": "SkillScanner/1.0"}
+
+    # Authenticate GitHub API requests if a token is set
+    github_token = os.environ.get("GITHUB_TOKEN", "")
+    if github_token and "api.github.com" in url:
+        headers["Authorization"] = f"Bearer {github_token}"
+
     req = urllib.request.Request(  # noqa: S310
         url,
-        headers={"User-Agent": "SkillScanner/1.0"},
+        headers=headers,
     )
     with urllib.request.urlopen(  # noqa: S310
         req,
@@ -2467,7 +2476,7 @@ class SkillScanner:
 
         return result
 
-    def _scan_github_repo(  # noqa: C901
+    def _scan_github_repo(  # noqa: C901, PLR0912, PLR0915
         self,
         owner: str,
         repo: str,
@@ -2475,8 +2484,9 @@ class SkillScanner:
     ) -> ScanResult:
         """Scan all skills in a GitHub repo using the Git Trees API.
 
-        Discovers all ``SKILL.md`` files recursively and scans
-        each skill directory.  Returns a combined result.
+        Uses a single API call to discover all ``SKILL.md`` files
+        recursively, then fetches raw content directly from
+        ``raw.githubusercontent.com`` (no Contents API needed).
         """
         repo_url = f"https://github.com/{owner}/{repo}"
         result = ScanResult(
@@ -2552,8 +2562,9 @@ class SkillScanner:
 
         tree_entries = tree_data.get("tree", [])
 
-        # Find all SKILL.md files
-        skill_dirs = []
+        # Find all SKILL.md files and group files by
+        # skill directory
+        skill_dirs: dict[str, list[dict]] = {}
         for entry in tree_entries:
             entry_path = entry.get("path", "")
             if (
@@ -2565,7 +2576,7 @@ class SkillScanner:
                     if "/" in entry_path
                     else ""
                 )
-                skill_dirs.append(parent)
+                skill_dirs[parent] = []
 
         if not skill_dirs:
             result.findings.append(
@@ -2584,17 +2595,152 @@ class SkillScanner:
             )
             return result
 
-        # Scan each skill directory via the existing
-        # tree scanner
+        # Assign each file to its skill directory
+        for entry in tree_entries:
+            entry_path = entry.get("path", "")
+            for skill_dir in skill_dirs:
+                prefix = f"{skill_dir}/" if skill_dir else ""
+                if not entry_path.startswith(prefix):
+                    continue
+                relative = entry_path[len(prefix):]
+                # Only direct children (no nested dirs)
+                if "/" not in relative:
+                    skill_dirs[skill_dir].append(entry)
+                    break
+
+        # Scan each skill using raw.githubusercontent.com
+        raw_base = (
+            f"https://raw.githubusercontent.com"
+            f"/{owner}/{repo}/{branch}"
+        )
+        executable_extensions = {
+            ".sh", ".bash", ".py", ".js",
+            ".ps1", ".bat", ".cmd",
+        }
+        skip_extensions = {
+            ".png", ".jpg", ".jpeg", ".gif",
+            ".ico", ".woff", ".ttf",
+        }
+
         sub_results = []
-        for skill_dir in skill_dirs:
+        for skill_dir, entries in skill_dirs.items():
+            skill_name = (
+                skill_dir.rstrip("/").split("/")[-1]
+                if skill_dir
+                else repo
+            )
             tree_url = (
                 f"https://github.com/{owner}/{repo}"
                 f"/tree/{branch}/{skill_dir}"
             )
-            sub = self._scan_github_tree(
-                tree_url, owner, repo, branch, skill_dir,
+            sub = ScanResult(
+                skill_path=tree_url,
+                skill_name=skill_name,
             )
+            sub.provenance = SkillProvenance(
+                source_url=tree_url,
+            )
+            sub.provenance.publisher = owner
+
+            metadata = SkillMetadata()
+
+            for entry in entries:
+                name = entry.get("path", "").split("/")[-1]
+                entry_type = entry.get("type", "")
+
+                if entry_type == "tree" and name == "scripts":
+                    metadata.has_scripts_folder = True
+                    continue
+                if entry_type != "blob":
+                    continue
+
+                metadata.skill_file_count += 1
+                suffix = (
+                    "." + name.rsplit(".", 1)[-1]
+                    if "." in name
+                    else ""
+                ).lower()
+                if suffix in executable_extensions:
+                    metadata.executable_file_count += 1
+                if suffix in skip_extensions:
+                    continue
+
+                # Fetch raw content (no API rate limit)
+                file_path = entry.get("path", "")
+                raw_url = f"{raw_base}/{file_path}"
+                try:
+                    content, _ = fetch_url(raw_url)
+                except Exception:  # noqa: BLE001
+                    continue
+
+                if name == "SKILL.md":
+                    yaml_match = re.match(
+                        r"^---\s*\n(.*?)\n---",
+                        content,
+                        re.DOTALL,
+                    )
+                    if yaml_match:
+                        try:
+                            fm = yaml.safe_load(
+                                yaml_match.group(1),
+                            )
+                            if fm and isinstance(fm, dict):
+                                metadata.has_valid_frontmatter = (
+                                    True
+                                )
+                                desc = fm.get(
+                                    "description", "",
+                                )
+                                metadata.description_length = (
+                                    len(desc)
+                                    if isinstance(desc, str)
+                                    else 0
+                                )
+                        except yaml.YAMLError:
+                            pass
+
+                sub.findings.extend(
+                    self.scan_content(content, name),
+                )
+
+            sub.metadata = metadata
+
+            # Structural warnings
+            if metadata.has_scripts_folder:
+                sub.findings.append(
+                    Finding(
+                        severity=Severity.INFO,
+                        category="structure",
+                        description=(
+                            "Skill contains scripts/ folder "
+                            "(2.1x higher vulnerability "
+                            "rate per research)"
+                        ),
+                        file_path=tree_url,
+                        recommendation=(
+                            "Carefully review all scripts "
+                            "before using this skill"
+                        ),
+                    )
+                )
+            if not metadata.has_valid_frontmatter:
+                sub.findings.append(
+                    Finding(
+                        severity=Severity.LOW,
+                        category="structure",
+                        description=(
+                            "SKILL.md missing or has invalid "
+                            "YAML frontmatter"
+                        ),
+                        file_path=tree_url,
+                        recommendation=(
+                            "Legitimate skills should have "
+                            "proper frontmatter with name "
+                            "and description"
+                        ),
+                    )
+                )
+
             sub_results.append(sub)
 
         # Merge sub-results into the main result
@@ -2613,9 +2759,6 @@ class SkillScanner:
         any_valid_fm = False
         for sub in sub_results:
             for f in sub.findings:
-                # Skip duplicate provenance findings
-                if f.category == "provenance":
-                    continue
                 result.findings.append(f)
             if sub.metadata:
                 total_files += sub.metadata.skill_file_count

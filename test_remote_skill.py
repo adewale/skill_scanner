@@ -424,46 +424,11 @@ _MOCK_GIT_TREES_RESPONSE = json.dumps(
     }
 )
 
-# Contents API responses for each subdirectory
-_MOCK_BASELINE_UI_LISTING = json.dumps(
-    [
-        {
-            "name": "SKILL.md",
-            "path": "skills/baseline-ui/SKILL.md",
-            "type": "file",
-            "download_url": (
-                "https://raw.githubusercontent.com"
-                "/ibelick/ui-skills/main"
-                "/skills/baseline-ui/SKILL.md"
-            ),
-        },
-    ]
-)
-
-_MOCK_FIXING_A11Y_LISTING = json.dumps(
-    [
-        {
-            "name": "SKILL.md",
-            "path": "skills/fixing-a11y/SKILL.md",
-            "type": "file",
-            "download_url": (
-                "https://raw.githubusercontent.com"
-                "/ibelick/ui-skills/main"
-                "/skills/fixing-a11y/SKILL.md"
-            ),
-        },
-    ]
-)
-
 
 def _mock_fetch_url_repo(url):
     """Return canned responses for repo-level scanning."""
     if "/git/trees/" in url:
         return (_MOCK_GIT_TREES_RESPONSE, url)
-    if "api.github.com" in url and "baseline-ui" in url:
-        return (_MOCK_BASELINE_UI_LISTING, url)
-    if "api.github.com" in url and "fixing-a11y" in url:
-        return (_MOCK_FIXING_A11Y_LISTING, url)
     if url.endswith("baseline-ui/SKILL.md"):
         return (
             build_skill_md(
