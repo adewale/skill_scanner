@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""YouTube Summary Skill – fetch a transcript and summarise with Claude."""
+"""YouTube Summary Skill – fetch a transcript for the current agent to summarise."""
 
 import json
 import re
 import subprocess
 import sys
 
-import anthropic
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api._errors import RequestBlocked
 
@@ -37,7 +36,7 @@ def fetch_transcript(video_id: str) -> str:
         transcript = ytt_api.fetch(video_id)
         return " ".join(snippet.text for snippet in transcript)
     except RequestBlocked:
-        print("Direct transcript fetch blocked, trying yt-dlp…")
+        print("Direct transcript fetch blocked, trying yt-dlp…", file=sys.stderr)
         return _fetch_transcript_ytdlp(video_id)
 
 
@@ -68,7 +67,6 @@ def _fetch_transcript_ytdlp(video_id: str) -> str:
     ).get("en")
     if not subs:
         raise RuntimeError("No English subtitles found via yt-dlp")
-    # Pick the json3 format URL and fetch it
     for fmt in subs:
         if fmt.get("ext") == "json3":
             sub_url = fmt["url"]
@@ -84,41 +82,17 @@ def _fetch_transcript_ytdlp(video_id: str) -> str:
     raise RuntimeError("No json3 subtitle format available")
 
 
-def summarise(transcript: str) -> str:
-    """Send the transcript to Claude and return a summary."""
-    client = anthropic.Anthropic()
-
-    with client.messages.stream(
-        model="claude-sonnet-4-6",
-        max_tokens=1024,
-        messages=[
-            {
-                "role": "user",
-                "content": (
-                    "Summarise the following YouTube video transcript. "
-                    "Provide a brief overview followed by the key points "
-                    "as a bulleted list.\n\n"
-                    f"Transcript:\n{transcript}"
-                ),
-            }
-        ],
-    ) as stream:
-        return stream.get_final_message().content[0].text
-
-
 def main() -> None:
     if len(sys.argv) < 2:
-        print("Usage: python youtube_summary.py <YOUTUBE_URL>")
+        print("Usage: python youtube_summary.py <YOUTUBE_URL>", file=sys.stderr)
         sys.exit(1)
 
     url = sys.argv[1]
     video_id = extract_video_id(url)
-    print(f"Fetching transcript for video: {video_id}")
+    print(f"Fetching transcript for video: {video_id}", file=sys.stderr)
     transcript = fetch_transcript(video_id)
-    print(f"Transcript length: {len(transcript)} characters")
-    print("\nSummarising…\n")
-    summary = summarise(transcript)
-    print(summary)
+    print(f"Transcript length: {len(transcript)} characters", file=sys.stderr)
+    print(transcript)
 
 
 if __name__ == "__main__":
