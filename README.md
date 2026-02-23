@@ -65,14 +65,17 @@ uv run skill_scanner.py --list-paths
 
 ## Detection categories
 
-- **dangerous_shell** -- piped execution, reverse shells, privilege escalation
-- **exfiltration** -- access to SSH keys, AWS credentials, browser data, crypto wallets
+- **dangerous_shell** -- piped execution, reverse shells, privilege escalation, subprocess shell=True
+- **exfiltration** -- access to SSH keys, AWS credentials, browser data, crypto wallets, DNS exfiltration
 - **suspicious_url** -- URL shorteners, paste sites, direct IP URLs
-- **obfuscation** -- base64 payloads, eval/exec, hex-encoded strings
+- **obfuscation** -- base64 payloads, eval/exec, hex-encoded strings, ROT13, zero-width chars, dynamic imports
 - **social_engineering** -- urgency tactics, copy-paste-run instructions
 - **prompt_injection** -- guardrail bypass, role manipulation, hidden instructions
 - **memory_poisoning** -- persistent agent memory/behavior modification
+- **config_poisoning** -- CLAUDE.md, settings.json, .mcp.json, shell config, git hooks modification
 - **supply_chain** -- unpinned dependencies, remote binary downloads
+- **permissions** -- unrestricted tool access, unjustified Bash, Write/Edit on analysis skills
+- **validation** -- name-directory mismatch, description-body misalignment
 
 ## References
 

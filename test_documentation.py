@@ -37,13 +37,16 @@ class TestReadmeDetectionCategories:
         "social_engineering",
         "prompt_injection",
         "memory_poisoning",
+        "config_poisoning",
         "supply_chain",
     ]
 
     def test_readme_lists_all_categories(self):
         readme = _read("README.md")
         for cat in self.EXPECTED_CATEGORIES:
-            assert cat in readme, f"README.md missing category: {cat}"
+            assert cat in readme, (
+                f"README.md missing category: {cat}"
+            )
 
     def test_scanner_has_all_categories(self):
         """Cross-reference: scanner patterns cover every documented category."""
@@ -135,6 +138,10 @@ class TestHowItWorksFunctionReferences:
         "_should_skip_finding",
         "_adjust_severity_for_context",
         "_check_base64_blobs",
+        "_check_unicode_obfuscation",
+        "_check_allowed_tools",
+        "_check_name_mismatch",
+        "_check_description_body_overlap",
         "extract_provenance",
         "analyze_skill_structure",
     ]
@@ -177,6 +184,7 @@ class TestThreatAnalysisCoverage:
         "Supply Chain": "SUPPLY_CHAIN_PATTERNS",
         "Prompt Injection": "PROMPT_INJECTION_PATTERNS",
         "Memory Poisoning": "MEMORY_POISONING_PATTERNS",
+        "Config Poisoning": "CONFIG_POISONING_PATTERNS",
         "Social Engineering": "SOCIAL_ENGINEERING_PATTERNS",
     }
 
@@ -256,6 +264,16 @@ class TestThreatAnalysisCoverage:
             f"doc claims {doc_detects}"
         )
 
+    def test_config_poisoning_count(self):
+        doc = _read("skill_threats_analysis.md")
+        scanner = SkillScanner()
+        _, doc_detects = self._extract_row(doc, "Config Poisoning")
+        code_count = len(scanner.CONFIG_POISONING_PATTERNS)
+        assert code_count == doc_detects, (
+            f"Config Poisoning: code has {code_count}, "
+            f"doc claims {doc_detects}"
+        )
+
     def test_social_engineering_count(self):
         doc = _read("skill_threats_analysis.md")
         scanner = SkillScanner()
@@ -277,6 +295,7 @@ class TestThreatAnalysisCoverage:
             + len(scanner.SOCIAL_ENGINEERING_PATTERNS)
             + len(scanner.PROMPT_INJECTION_PATTERNS)
             + len(scanner.MEMORY_POISONING_PATTERNS)
+            + len(scanner.CONFIG_POISONING_PATTERNS)
             + len(scanner.SUPPLY_CHAIN_PATTERNS)
         )
         assert len(scanner.all_patterns) == expected

@@ -36,6 +36,9 @@ Based on research from:
 | macOS LaunchAgent loading | MEDIUM | ✅ Yes | Regex pattern |
 | Systemd service enablement | MEDIUM | ✅ Yes | Regex pattern |
 | Background process with nohup | MEDIUM | ✅ Yes | Regex pattern |
+| `subprocess` with `shell=True` | HIGH | ✅ Yes | Regex pattern |
+| `os.system()` command execution | HIGH | ✅ Yes | Regex pattern |
+| `os.popen()` command execution | HIGH | ✅ Yes | Regex pattern |
 
 ### Data Exfiltration
 
@@ -59,6 +62,8 @@ Based on research from:
 | Agent memory file access (SOUL.md, MEMORY.md) | HIGH | ✅ Yes | Regex pattern |
 | Silent POST requests with data | MEDIUM | ✅ Yes | Regex pattern |
 | Netcat to IP address | HIGH | ✅ Yes | Regex pattern |
+| DNS exfiltration via `getaddrinfo` | HIGH | ✅ Yes | Regex pattern |
+| DNS lookup with variable interpolation | MEDIUM | ✅ Yes | Regex pattern |
 
 ### Suspicious URLs
 
@@ -93,7 +98,13 @@ Based on research from:
 | Hex-encoded strings | HIGH | ✅ Yes | Regex pattern |
 | Octal-encoded strings | HIGH | ✅ Yes | Regex pattern |
 | Bash substring obfuscation (`${var::n:m}`) | MEDIUM | ✅ Yes | Regex pattern |
+| ROT13/codec obfuscation | HIGH | ✅ Yes | Regex pattern |
+| `chr()` chain string construction | MEDIUM | ✅ Yes | Regex pattern |
+| Dynamic `__import__()` usage | HIGH | ✅ Yes | Regex pattern |
+| Dynamic `importlib.import_module()` usage | MEDIUM | ✅ Yes | Regex pattern |
 | Arithmetic obfuscation | LOW | ✅ Yes | Regex pattern |
+| Zero-width character detection | HIGH | ✅ Yes | Unicode scan |
+| RTL override character detection | HIGH | ✅ Yes | Unicode scan |
 | Unmarked code blocks with shell commands | MEDIUM | ✅ Yes | AST analysis |
 
 ### Supply Chain Risks
@@ -155,6 +166,34 @@ Based on research from:
 | Time-delayed staged attacks | — | ⚠️ Partial | Detects memory writes |
 | Cross-session behavioral backdoors | — | ⚠️ Partial | Detects memory writes |
 
+### Agent Config Poisoning
+
+| Specific Attack | Severity | Detected? | Detection Method |
+|-----------------|----------|-----------|------------------|
+| CLAUDE.md configuration modification | CRITICAL | ✅ Yes | Regex pattern |
+| Agent settings.json modification | CRITICAL | ✅ Yes | Regex pattern |
+| MCP config (.mcp.json) modification | CRITICAL | ✅ Yes | Regex pattern |
+| Shell config poisoning (.bashrc, .zshrc, .profile) | CRITICAL | ✅ Yes | Regex pattern |
+| Git hooks modification (.git/hooks/) | CRITICAL | ✅ Yes | Regex pattern |
+| Husky hooks modification (.husky/) | CRITICAL | ✅ Yes | Regex pattern |
+| Permission allowlist/auto-approve manipulation | HIGH | ✅ Yes | Regex pattern |
+
+### Permission Analysis
+
+| Specific Attack | Severity | Detected? | Detection Method |
+|-----------------|----------|-----------|------------------|
+| Unrestricted tool access (`allowed-tools: *`) | CRITICAL | ✅ Yes | Frontmatter check |
+| Bash tool without justification | MEDIUM | ✅ Yes | Frontmatter check |
+| Write/Edit tools on analysis-type skills | MEDIUM | ✅ Yes | Frontmatter + desc check |
+
+### Validation
+
+| Specific Attack | Severity | Detected? | Detection Method |
+|-----------------|----------|-----------|------------------|
+| Missing frontmatter name field | HIGH | ✅ Yes | Frontmatter check |
+| Name-directory mismatch | MEDIUM | ✅ Yes | Frontmatter + path check |
+| Description-body misalignment | MEDIUM | ✅ Yes | Keyword overlap heuristic |
+
 ### Social Engineering
 
 | Specific Attack | Severity | Detected? | Detection Method |
@@ -176,15 +215,18 @@ Based on research from:
 
 | Category | Threats Identified | Scanner Detects | Coverage |
 |----------|-------------------|-----------------|----------|
-| Dangerous Shell Execution | 17 | 17 | **100%** |
-| Data Exfiltration | 19 | 19 | **100%** |
+| Dangerous Shell Execution | 20 | 20 | **100%** |
+| Data Exfiltration | 21 | 21 | **100%** |
 | Suspicious URLs | 14 | 14 | **100%** |
-| Obfuscation | 12 | 10 | **83%** |
+| Obfuscation | 18 | 14 | **78%** |
 | Supply Chain | 15 | 11 | **73%** |
 | Prompt Injection | 19 | 16 | **84%** |
 | Memory Poisoning | 10 | 7 | **70%** |
+| Config Poisoning | 7 | 7 | **100%** |
+| Permissions | 3 | 3 | **100%** |
+| Validation | 3 | 3 | **100%** |
 | Social Engineering | 10 | 8 | **80%** |
-| **Total** | **116** | **102** | **88%** |
+| **Total** | **140** | **118** | **84%** |
 
 ---
 

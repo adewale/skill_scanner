@@ -480,6 +480,22 @@ class SkillScanner:
             Severity.MEDIUM,
             "Systemd service enablement",
         ),
+        # Dangerous Python execution patterns
+        (
+            r"subprocess.*shell\s*=\s*True",
+            Severity.HIGH,
+            "subprocess with shell=True",
+        ),
+        (
+            r"os\.system\s*\(",
+            Severity.HIGH,
+            "os.system() command execution",
+        ),
+        (
+            r"os\.popen\s*\(",
+            Severity.HIGH,
+            "os.popen() command execution",
+        ),
         # Process hiding/evasion
         (
             r"nohup.*&\s*$",
@@ -593,6 +609,17 @@ class SkillScanner:
             r"nc\s+\d+\.\d+\.\d+\.\d+",
             Severity.HIGH,
             "Netcat to IP address",
+        ),
+        # DNS exfiltration
+        (
+            r"socket\.getaddrinfo\s*\(",
+            Severity.HIGH,
+            "DNS exfiltration via getaddrinfo",
+        ),
+        (
+            r"(dig|nslookup)\s+.*\$",
+            Severity.MEDIUM,
+            "DNS lookup with variable interpolation",
         ),
     ]
 
@@ -719,6 +746,30 @@ class SkillScanner:
             r"\\[0-7]{3}(\\[0-7]{3}){5,}",
             Severity.HIGH,
             "Octal-encoded string",
+        ),
+        # ROT13 / codec obfuscation
+        (
+            r"codecs\.(decode|encode)\s*\(.*rot",
+            Severity.HIGH,
+            "ROT13/codec obfuscation",
+        ),
+        # Character-by-character string construction
+        (
+            r"chr\s*\(\d+\)\s*\+\s*chr\s*\(\d+\)"
+            r"\s*\+\s*chr\s*\(\d+\)",
+            Severity.MEDIUM,
+            "chr() chain string construction",
+        ),
+        # Dynamic imports
+        (
+            r"__import__\s*\(",
+            Severity.HIGH,
+            "Dynamic __import__() usage",
+        ),
+        (
+            r"importlib\.import_module\s*\(",
+            Severity.MEDIUM,
+            "Dynamic importlib.import_module() usage",
         ),
         # Variable obfuscation
         (
@@ -921,6 +972,55 @@ class SkillScanner:
         ),
     ]
 
+    # Agent config poisoning patterns
+    CONFIG_POISONING_PATTERNS: ClassVar[list[tuple[str, Severity, str]]] = [
+        # Agent configuration files
+        (
+            r"(write|modify|update|append|add)"
+            r"\s+(to\s+)?CLAUDE\.md",
+            Severity.CRITICAL,
+            "CLAUDE.md configuration poisoning",
+        ),
+        (
+            r"(open|write|Path).*settings\.json",
+            Severity.CRITICAL,
+            "Agent settings.json modification",
+        ),
+        (
+            r"(open|write|Path|modify|update)"
+            r".*\.mcp\.json",
+            Severity.CRITICAL,
+            "MCP config (.mcp.json) modification",
+        ),
+        # Shell configuration poisoning
+        (
+            r"(open|write|append|>>).*\."
+            r"(bashrc|zshrc|profile|bash_profile)",
+            Severity.CRITICAL,
+            "Shell config poisoning",
+        ),
+        # Git hooks modification
+        (
+            r"(open|write|Path|chmod).*"
+            r"\.git/hooks/",
+            Severity.CRITICAL,
+            "Git hooks modification",
+        ),
+        (
+            r"(open|write|Path|chmod).*"
+            r"\.husky/",
+            Severity.CRITICAL,
+            "Husky hooks modification",
+        ),
+        # Auto-approve / allowlist manipulation
+        (
+            r"(add|append).*"
+            r"(allowlist|whitelist|auto.?approve)",
+            Severity.HIGH,
+            "Permission allowlist manipulation",
+        ),
+    ]
+
     # Supply chain risk patterns
     SUPPLY_CHAIN_PATTERNS: ClassVar[list[tuple[str, Severity, str]]] = [
         # npx without version pinning
@@ -1019,6 +1119,10 @@ class SkillScanner:
                 (*p, "memory_poisoning")
                 for p in self.MEMORY_POISONING_PATTERNS
             ]
+            + [
+                (*p, "config_poisoning")
+                for p in self.CONFIG_POISONING_PATTERNS
+            ]
             + [(*p, "supply_chain") for p in self.SUPPLY_CHAIN_PATTERNS]
         )
 
@@ -1096,6 +1200,7 @@ class SkillScanner:
         if self._is_documentation_language(lang) and category not in (
             "prompt_injection",
             "memory_poisoning",
+            "config_poisoning",
         ):
             if severity == Severity.HIGH:
                 return Severity.MEDIUM
@@ -1146,7 +1251,8 @@ class SkillScanner:
                 )
 
             # Scan prose for prompt injection,
-            # memory poisoning, social engineering,
+            # memory poisoning, config poisoning,
+            # social engineering,
             # and supply chain patterns (inline code
             # like `npx skills add` appears in prose)
             prose_patterns = (
@@ -1157,6 +1263,10 @@ class SkillScanner:
                 + [
                     (*p, "memory_poisoning")
                     for p in self.MEMORY_POISONING_PATTERNS
+                ]
+                + [
+                    (*p, "config_poisoning")
+                    for p in self.CONFIG_POISONING_PATTERNS
                 ]
                 + [
                     (*p, "social_engineering")
@@ -1231,6 +1341,9 @@ class SkillScanner:
         findings.extend(
             self._check_base64_blobs(content, file_path),
         )
+        findings.extend(
+            self._check_unicode_obfuscation(content, file_path),
+        )
 
         return findings
 
@@ -1265,7 +1378,7 @@ class SkillScanner:
 
         # Check for overly broad descriptions
         desc = metadata.get("description", "")
-        if len(desc) > LONG_DESCRIPTION_THRESHOLD:
+        if isinstance(desc, str) and len(desc) > LONG_DESCRIPTION_THRESHOLD:
             findings.append(
                 Finding(
                     severity=Severity.LOW,
@@ -1278,6 +1391,223 @@ class SkillScanner:
                     matched_content=(f"Description length: {len(desc)} chars"),
                     recommendation=(
                         "Review the full description for hidden instructions"
+                    ),
+                )
+            )
+
+        # Check allowed-tools permissions
+        findings.extend(
+            self._check_allowed_tools(metadata, file_path),
+        )
+
+        return findings
+
+    def _check_allowed_tools(
+        self,
+        metadata: dict,
+        file_path: str,
+    ) -> list[Finding]:
+        """Analyze allowed-tools for permission risks."""
+        findings = []
+        tools_str = metadata.get("allowed-tools", "")
+
+        if not isinstance(tools_str, str) or not tools_str.strip():
+            return findings
+
+        # Unrestricted wildcard
+        if tools_str.strip() == "*":
+            findings.append(
+                Finding(
+                    severity=Severity.CRITICAL,
+                    category="permissions",
+                    description=(
+                        "Unrestricted tool access "
+                        "(allowed-tools: *)"
+                    ),
+                    file_path=file_path,
+                    matched_content="allowed-tools: *",
+                    recommendation=(
+                        "Specify only the tools the "
+                        "skill actually needs"
+                    ),
+                )
+            )
+            return findings
+
+        tools_list = [
+            t.strip()
+            for t in tools_str.replace(",", " ").split()
+            if t.strip()
+        ]
+
+        # Bash without justification
+        if "Bash" in tools_list:
+            findings.append(
+                Finding(
+                    severity=Severity.MEDIUM,
+                    category="permissions",
+                    description=(
+                        "Bash tool granted "
+                        "(verify shell access is needed)"
+                    ),
+                    file_path=file_path,
+                    matched_content=(
+                        f"allowed-tools: {tools_str}"
+                    ),
+                    recommendation=(
+                        "Bash enables arbitrary command "
+                        "execution. Ensure it is "
+                        "justified by scripts/ or "
+                        "shell commands in the skill"
+                    ),
+                )
+            )
+
+        # Write/Edit on analysis-described skills
+        write_tools = {"Write", "Edit"}
+        has_write = write_tools & set(tools_list)
+        desc = metadata.get("description", "")
+        if (
+            has_write
+            and isinstance(desc, str)
+            and re.search(
+                r"(?i)(scan|analy|review|check|lint"
+                r"|audit|inspect|read)",
+                desc,
+            )
+        ):
+            findings.append(
+                Finding(
+                    severity=Severity.MEDIUM,
+                    category="permissions",
+                    description=(
+                        "Write/Edit tools on an "
+                        "analysis-type skill"
+                    ),
+                    file_path=file_path,
+                    matched_content=(
+                        f"Tools: {', '.join(has_write)}"
+                        f" | Desc: {desc[:60]}"
+                    ),
+                    recommendation=(
+                        "Analysis skills should not need "
+                        "file modification tools"
+                    ),
+                )
+            )
+
+        return findings
+
+    def _check_name_mismatch(
+        self,
+        frontmatter: dict,
+        skill_path: Path,
+    ) -> list[Finding]:
+        """Check if frontmatter name matches directory name."""
+        findings = []
+        fm_name = frontmatter.get("name")
+
+        if fm_name is None:
+            findings.append(
+                Finding(
+                    severity=Severity.HIGH,
+                    category="validation",
+                    description=(
+                        "Required 'name' field missing "
+                        "from frontmatter"
+                    ),
+                    file_path=str(
+                        skill_path / "SKILL.md",
+                    ),
+                    recommendation=(
+                        "Add a 'name' field to the "
+                        "YAML frontmatter"
+                    ),
+                )
+            )
+        elif isinstance(fm_name, str):
+            dir_name = skill_path.name
+            if fm_name != dir_name:
+                findings.append(
+                    Finding(
+                        severity=Severity.MEDIUM,
+                        category="validation",
+                        description=(
+                            f"Frontmatter name '{fm_name}' "
+                            f"does not match directory "
+                            f"name '{dir_name}'"
+                        ),
+                        file_path=str(
+                            skill_path / "SKILL.md",
+                        ),
+                        matched_content=(
+                            f"name: {fm_name} vs "
+                            f"dir: {dir_name}"
+                        ),
+                        recommendation=(
+                            "Skill name should match its "
+                            "directory name for consistency"
+                        ),
+                    )
+                )
+
+        return findings
+
+    # Minimum word count for overlap heuristic
+    _MIN_BODY_WORDS_FOR_OVERLAP = 50
+    _LOW_OVERLAP_THRESHOLD = 0.1
+
+    def _check_description_body_overlap(
+        self,
+        frontmatter: dict,
+        body: str,
+        file_path: str,
+    ) -> list[Finding]:
+        """Check description-vs-body keyword alignment."""
+        findings = []
+        desc = frontmatter.get("description", "")
+
+        if not isinstance(desc, str) or not desc:
+            return findings
+
+        # Extract 4+ char lowercase words
+        desc_words = set(
+            re.findall(r"\b[a-z]{4,}\b", desc.lower()),
+        )
+        body_words = set(
+            re.findall(r"\b[a-z]{4,}\b", body.lower()),
+        )
+
+        # Skip if body is too short for meaningful
+        # overlap analysis
+        if (
+            not desc_words
+            or len(body_words) < self._MIN_BODY_WORDS_FOR_OVERLAP
+        ):
+            return findings
+
+        overlap = desc_words & body_words
+        ratio = len(overlap) / len(desc_words)
+
+        if ratio < self._LOW_OVERLAP_THRESHOLD:
+            findings.append(
+                Finding(
+                    severity=Severity.MEDIUM,
+                    category="validation",
+                    description=(
+                        "Description does not align "
+                        "with skill body content "
+                        f"(overlap: {ratio:.0%})"
+                    ),
+                    file_path=file_path,
+                    matched_content=(
+                        f"Desc keywords: "
+                        f"{', '.join(sorted(desc_words)[:5])}"
+                    ),
+                    recommendation=(
+                        "A skill whose body doesn't "
+                        "match its description may be "
+                        "misrepresenting its purpose"
                     ),
                 )
             )
@@ -1330,6 +1660,80 @@ class SkillScanner:
                 pass  # Not valid base64, ignore
         return findings
 
+    def _check_unicode_obfuscation(
+        self,
+        content: str,
+        file_path: str,
+    ) -> list[Finding]:
+        """Detect zero-width characters and RTL overrides."""
+        findings = []
+
+        # Zero-width characters
+        zwc_pattern = re.compile(
+            r"[\u200b\u200c\u200d\u2060\ufeff]",
+        )
+        for line_num, line in enumerate(
+            content.split("\n"),
+            1,
+        ):
+            zwc_matches = zwc_pattern.findall(line)
+            if zwc_matches:
+                chars = [
+                    f"U+{ord(c):04X}" for c in zwc_matches
+                ]
+                findings.append(
+                    Finding(
+                        severity=Severity.HIGH,
+                        category="obfuscation",
+                        description=(
+                            "Zero-width characters detected: "
+                            f"{', '.join(chars)}"
+                        ),
+                        file_path=file_path,
+                        line_number=line_num,
+                        matched_content=(
+                            line.strip()[:80]
+                        ),
+                        recommendation=(
+                            "Zero-width characters can hide "
+                            "malicious instructions from "
+                            "human reviewers"
+                        ),
+                    )
+                )
+
+        # RTL override / embedding characters
+        rtl_pattern = re.compile(
+            r"[\u202a-\u202e\u2066-\u2069]",
+        )
+        for line_num, line in enumerate(
+            content.split("\n"),
+            1,
+        ):
+            if rtl_pattern.search(line):
+                findings.append(
+                    Finding(
+                        severity=Severity.HIGH,
+                        category="obfuscation",
+                        description=(
+                            "RTL override/embedding character "
+                            "detected"
+                        ),
+                        file_path=file_path,
+                        line_number=line_num,
+                        matched_content=(
+                            line.strip()[:80]
+                        ),
+                        recommendation=(
+                            "RTL overrides can reverse "
+                            "displayed text direction to "
+                            "hide malicious content"
+                        ),
+                    )
+                )
+
+        return findings
+
     def _get_recommendation(self, category: str) -> str:
         """Get remediation recommendation for a category."""
         recommendations = {
@@ -1371,6 +1775,11 @@ class SkillScanner:
                 "This skill attempts to modify "
                 "agent memory/behavior persistently."
                 " High risk of backdoor."
+            ),
+            "config_poisoning": (
+                "This skill attempts to modify "
+                "agent configuration files. "
+                "High risk of persistent compromise."
             ),
             "structure": (
                 "Skills with executable code require"
@@ -1546,30 +1955,69 @@ class SkillScanner:
         file_path: str,
     ) -> list[Finding]:
         """Scan for hidden malicious content."""
-        return [
-            Finding(
-                severity=Severity.CRITICAL,
-                category="prompt_injection",
-                description=("Hidden executable instruction in HTML comment"),
-                file_path=file_path,
-                matched_content=comment[:80],
-                recommendation=(
-                    "Hidden instructions are a "
-                    "strong indicator of "
-                    "malicious intent"
-                ),
-            )
-            for comment in ast.get(
-                "html_comments",
-                [],
-            )
+        findings = []
+
+        for comment in ast.get("html_comments", []):
+            # Check for executable keywords
             if re.search(
                 r"(curl|wget|bash|eval|exec"
                 r"|nc\s)",
                 comment,
                 re.IGNORECASE,
-            )
-        ]
+            ):
+                findings.append(
+                    Finding(
+                        severity=Severity.CRITICAL,
+                        category="prompt_injection",
+                        description=(
+                            "Hidden executable instruction "
+                            "in HTML comment"
+                        ),
+                        file_path=file_path,
+                        matched_content=comment[:80],
+                        recommendation=(
+                            "Hidden instructions are a "
+                            "strong indicator of "
+                            "malicious intent"
+                        ),
+                    )
+                )
+                continue  # Already flagged, skip
+
+            # Check for prompt injection patterns
+            # hidden in comments
+            for (
+                pattern,
+                severity,
+                description,
+            ) in self.PROMPT_INJECTION_PATTERNS:
+                if re.search(
+                    pattern,
+                    comment,
+                    re.IGNORECASE,
+                ):
+                    findings.append(
+                        Finding(
+                            severity=Severity.CRITICAL,
+                            category="prompt_injection",
+                            description=(
+                                "Hidden injection in HTML "
+                                f"comment: {description}"
+                            ),
+                            file_path=file_path,
+                            matched_content=(
+                                comment[:80]
+                            ),
+                            recommendation=(
+                                "Injection patterns hidden "
+                                "in comments indicate "
+                                "malicious intent"
+                            ),
+                        )
+                    )
+                    break  # One finding per comment
+
+        return findings
 
     def scan_file(self, file_path: Path) -> list[Finding]:
         """Scan a single file."""
@@ -1906,8 +2354,41 @@ class SkillScanner:
                 )
             )
 
-        # Scan SKILL.md first
+        # Check frontmatter name vs directory name
+        # and description-body alignment
         skill_md = skill_path / "SKILL.md"
+        if skill_md.exists():
+            try:
+                md_content = skill_md.read_text(
+                    encoding="utf-8",
+                    errors="ignore",
+                )
+                fm_match = re.match(
+                    r"^---\s*\n(.*?)\n---\s*\n?",
+                    md_content,
+                    re.DOTALL,
+                )
+                if fm_match:
+                    fm = yaml.safe_load(fm_match.group(1))
+                    if fm and isinstance(fm, dict):
+                        result.findings.extend(
+                            self._check_name_mismatch(
+                                fm,
+                                skill_path,
+                            )
+                        )
+                        body = md_content[fm_match.end() :]
+                        result.findings.extend(
+                            self._check_description_body_overlap(
+                                fm,
+                                body,
+                                str(skill_md),
+                            )
+                        )
+            except (OSError, yaml.YAMLError):
+                pass
+
+        # Scan SKILL.md first
         if skill_md.exists():
             result.findings.extend(
                 self.scan_file(skill_md),

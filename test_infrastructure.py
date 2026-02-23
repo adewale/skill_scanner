@@ -591,6 +591,7 @@ class TestGetRecommendation:
             "supply_chain",
             "prompt_injection",
             "memory_poisoning",
+            "config_poisoning",
             "structure",
             "provenance",
         ],

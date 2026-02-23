@@ -14,15 +14,16 @@ For `.md` files, `parse_skill_ast()` uses **markdown-it-py** to extract structur
 
 ## Detection Engine
 
-The core is **272+ regex patterns across 8 categories**: dangerous shell commands, data exfiltration, suspicious URLs, obfuscation, social engineering, prompt injection, memory poisoning, and supply chain risks. Each pattern has a severity (CRITICAL through INFO).
+The core is **272+ regex patterns across 9 categories**: dangerous shell commands, data exfiltration, suspicious URLs, obfuscation, social engineering, prompt injection, memory poisoning, config poisoning, and supply chain risks. Each pattern has a severity (CRITICAL through INFO).
 
-Three layers reduce false positives:
+Four layers reduce false positives:
 
 1. **Whitelists** -- TypeScript `Env` type patterns and safe localhost dev ports (3000, 5173, 8787, etc.) are skipped via `_should_skip_finding()`.
 2. **Severity adjustment** -- `_adjust_severity_for_context()` downgrades findings in documentation languages (TypeScript, Python examples) and upgrades findings in executable languages (bash, sh).
-3. **AST-aware scanning** -- Code blocks, prose, and hidden content (HTML comments) are scanned separately with category-appropriate patterns. Prose only gets checked for prompt injection, memory poisoning, and social engineering.
+3. **AST-aware scanning** -- Code blocks, prose, and hidden content (HTML comments) are scanned separately with category-appropriate patterns. Prose gets checked for prompt injection, memory poisoning, config poisoning, and social engineering.
+4. **Unicode analysis** -- `_check_unicode_obfuscation()` detects zero-width characters (U+200B-U+200D, U+2060, U+FEFF) and RTL override characters (U+202A-U+202E, U+2066-U+2069) used to hide content from human reviewers.
 
-A special heuristic (`_check_base64_blobs()`) decodes any base64 string over 100 chars and checks if it contains shell keywords.
+Additional heuristics: `_check_base64_blobs()` decodes any base64 string over 100 chars and checks if it contains shell keywords. `_check_description_body_overlap()` compares frontmatter description keywords against body content to detect misaligned skills. `_check_allowed_tools()` analyzes permission grants for least-privilege violations. `_check_name_mismatch()` verifies frontmatter name matches directory name.
 
 ## Provenance and Trust
 
@@ -45,10 +46,14 @@ main() -> get_default_skill_paths() -> scan_skill() for each
   scan_skill():
     extract_provenance() -> trust score + official status
     analyze_skill_structure() -> risk score
+    _check_name_mismatch() -> name vs directory validation
+    _check_description_body_overlap() -> misalignment detection
     scan_file(SKILL.md) -> parse_skill_ast() -> scan_code_blocks()
                                              -> scan_hidden_content()
+                                             -> _check_allowed_tools()
                                              -> scan prose
                                              -> check base64 blobs
+                                             -> _check_unicode_obfuscation()
     scan_file() for all other files
   -> ScanResult with findings list
 -> print or JSON output
