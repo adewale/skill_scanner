@@ -4,6 +4,8 @@ Every test in this file uses ONLY benign content.
 No malicious payloads, no dangerous patterns.
 """
 
+import json
+import os
 from pathlib import Path
 
 import pytest
@@ -15,6 +17,8 @@ from skill_scanner import (
     Severity,
     SkillMetadata,
     SkillProvenance,
+    SkillScanner,
+    _github_to_raw_url,
     get_default_skill_paths,
     main,
     print_findings,
@@ -920,3 +924,581 @@ class TestJSONOutput:
         assert output["total_high"] == 1
         assert output["total_critical"] == 0
         assert len(output["results"][0]["findings"]) == 1
+
+
+# ---------------------------------------------------------------
+# _github_to_raw_url
+# ---------------------------------------------------------------
+
+
+class TestGithubToRawUrl:
+    """URL conversion utility for GitHub blob → raw."""
+
+    def test_converts_blob_url(self):
+        url = (
+            "https://github.com/user/repo"
+            "/blob/main/path/SKILL.md"
+        )
+        result = _github_to_raw_url(url)
+        assert result == (
+            "https://raw.githubusercontent.com"
+            "/user/repo/main/path/SKILL.md"
+        )
+
+    def test_preserves_non_github_url(self):
+        url = "https://example.com/skill/SKILL.md"
+        result = _github_to_raw_url(url)
+        assert result == url
+
+    def test_preserves_github_non_blob_url(self):
+        url = "https://github.com/user/repo"
+        result = _github_to_raw_url(url)
+        assert result == url
+
+    def test_handles_nested_paths(self):
+        url = (
+            "https://github.com/org/repo"
+            "/blob/feature/a/b/c.md"
+        )
+        result = _github_to_raw_url(url)
+        assert "raw.githubusercontent.com" in result
+        assert "/org/repo/" in result
+
+
+# ---------------------------------------------------------------
+# parse_skill_ast -- error branches
+# ---------------------------------------------------------------
+
+
+class TestParseSkillAstErrors:
+    """Error handling in parse_skill_ast."""
+
+    def test_malformed_yaml_frontmatter(self, scanner):
+        """Invalid YAML in frontmatter should not crash."""
+        md = "---\nname: [invalid: yaml: {{{\n---\nBody."
+        ast = scanner.parse_skill_ast(md)
+        # Should still parse but frontmatter is None
+        assert ast["frontmatter"] is None
+
+    def test_empty_content(self, scanner):
+        md = ""
+        ast = scanner.parse_skill_ast(md)
+        assert ast["code_blocks"] == []
+        assert ast["headings"] == []
+
+
+# ---------------------------------------------------------------
+# scan_file -- error/verbose branches
+# ---------------------------------------------------------------
+
+
+class TestScanFileVerbose:
+    """Verbose mode output for scan_file."""
+
+    def test_verbose_unreadable_warns(self, capsys, monkeypatch):
+        """Verbose scanner warns when a file can't be read."""
+        scanner = SkillScanner(verbose=True)
+
+        orig_read = Path.read_text
+
+        def _raise_on_bad(self, *a, **kw):
+            if "bad" in str(self):
+                raise OSError("Permission denied")
+            return orig_read(self, *a, **kw)
+
+        monkeypatch.setattr(Path, "read_text", _raise_on_bad)
+        scanner.scan_file(Path("/fake/bad.md"))
+        captured = capsys.readouterr()
+        assert "Warning" in captured.out
+
+    def test_non_verbose_unreadable_silent(
+        self,
+        capsys,
+        monkeypatch,
+    ):
+        """Non-verbose scanner is silent on read errors."""
+        scanner = SkillScanner(verbose=False)
+
+        def _raise(self, *a, **kw):
+            raise OSError("Permission denied")
+
+        monkeypatch.setattr(Path, "read_text", _raise)
+        scanner.scan_file(Path("/fake/bad2.md"))
+        captured = capsys.readouterr()
+        assert captured.out == ""
+
+
+# ---------------------------------------------------------------
+# Unmarked code blocks
+# ---------------------------------------------------------------
+
+
+class TestUnmarkedCodeBlocks:
+    """Code blocks without a language tag containing shell commands."""
+
+    def test_unmarked_block_with_curl(self, scanner):
+        md = build_skill_md(
+            code_blocks=[("", "curl https://example.com/api")],
+        )
+        findings = scanner.scan_content(md, "test.md")
+        assert any(
+            f.category == "obfuscation"
+            and "Unmarked" in f.description
+            for f in findings
+        )
+
+    def test_marked_block_no_warning(self, scanner):
+        md = build_skill_md(
+            code_blocks=[
+                ("bash", "curl https://example.com/api"),
+            ],
+        )
+        findings = scanner.scan_content(md, "test.md")
+        assert not any(
+            f.category == "obfuscation"
+            and "Unmarked" in f.description
+            for f in findings
+        )
+
+
+# ---------------------------------------------------------------
+# analyze_skill_structure -- YAML error branches
+# ---------------------------------------------------------------
+
+
+class TestAnalyzeStructureErrors:
+    """Error branches in analyze_skill_structure."""
+
+    def test_malformed_yaml_in_skill_md(self, fs, scanner):
+        """Broken YAML should not crash structure analysis."""
+        fs.create_dir("/skill")
+        fs.create_file(
+            "/skill/SKILL.md",
+            contents="---\nbad: yaml: {{{\n---\n",
+        )
+        m = scanner.analyze_skill_structure(Path("/skill"))
+        assert m.has_valid_frontmatter is False
+
+    def test_valid_yaml_no_dict(self, fs, scanner):
+        """YAML that parses to non-dict should be invalid."""
+        fs.create_dir("/skill")
+        fs.create_file(
+            "/skill/SKILL.md",
+            contents="---\njust a string\n---\n",
+        )
+        m = scanner.analyze_skill_structure(Path("/skill"))
+        assert m.has_valid_frontmatter is False
+
+
+# ---------------------------------------------------------------
+# extract_provenance -- parent git search
+# ---------------------------------------------------------------
+
+
+class TestProvenanceParentGit:
+    """Git config found in parent directories."""
+
+    def test_finds_git_in_parent(self, fs, scanner):
+        fs.create_dir("/repo/.git")
+        fs.create_file(
+            "/repo/.git/config",
+            contents=(
+                '[remote "origin"]\n'
+                "\turl = https://github.com/"
+                "testorg/testrepo.git\n"
+            ),
+        )
+        fs.create_dir("/repo/skills/my-skill")
+        fs.create_file(
+            "/repo/skills/my-skill/SKILL.md",
+            contents="# Hello\n",
+        )
+        p = scanner.extract_provenance(
+            Path("/repo/skills/my-skill"),
+        )
+        assert p.publisher == "testorg"
+
+    def test_both_security_and_coc_early_break(
+        self,
+        fs,
+        scanner,
+    ):
+        """Both SECURITY.md and CODE_OF_CONDUCT.md triggers break."""
+        fs.create_dir("/skill")
+        fs.create_file(
+            "/skill/SECURITY.md",
+            contents="# Security\n",
+        )
+        fs.create_file(
+            "/skill/CODE_OF_CONDUCT.md",
+            contents="# CoC\n",
+        )
+        p = scanner.extract_provenance(Path("/skill"))
+        assert p.has_security_policy is True
+        assert p.has_code_of_conduct is True
+
+
+# ---------------------------------------------------------------
+# scan_url (mocked network)
+# ---------------------------------------------------------------
+
+
+class TestScanUrl:
+    """scan_url with monkeypatched fetch_url."""
+
+    def test_scan_url_basic(self, scanner, monkeypatch):
+        """Scanning a URL produces a ScanResult."""
+        md = build_skill_md(
+            frontmatter={"name": "remote"},
+            body="Hello.",
+        )
+        monkeypatch.setattr(
+            "skill_scanner.fetch_url",
+            lambda url: (md, url),
+        )
+        result = scanner.scan_url(
+            "https://example.com/skills/remote/SKILL.md",
+        )
+        assert result.skill_name == "SKILL.md"
+        assert result.provenance is not None
+
+    def test_scan_url_well_known(self, scanner, monkeypatch):
+        """A well-known URL should be marked OFFICIAL."""
+        md = build_skill_md(
+            frontmatter={"name": "test"},
+            body="Hello.",
+        )
+        monkeypatch.setattr(
+            "skill_scanner.fetch_url",
+            lambda url: (md, url),
+        )
+        result = scanner.scan_url(
+            "https://example.com/.well-known/skills/test/SKILL.md",
+        )
+        assert result.provenance.is_official is True
+
+    def test_scan_url_not_well_known(self, scanner, monkeypatch):
+        """Non-well-known URL gets provenance warning."""
+        md = build_skill_md(body="Hello.")
+        monkeypatch.setattr(
+            "skill_scanner.fetch_url",
+            lambda url: (md, url),
+        )
+        result = scanner.scan_url(
+            "https://example.com/skills/test/SKILL.md",
+        )
+        prov_findings = [
+            f
+            for f in result.findings
+            if f.category == "provenance"
+        ]
+        assert len(prov_findings) > 0
+
+    def test_scan_url_fetch_error(self, scanner, monkeypatch):
+        """Network error produces fetch_error finding."""
+
+        def _raise(url):
+            raise ConnectionError("Network down")
+
+        monkeypatch.setattr(
+            "skill_scanner.fetch_url",
+            _raise,
+        )
+        result = scanner.scan_url(
+            "https://example.com/SKILL.md",
+        )
+        assert any(
+            f.category == "fetch_error"
+            for f in result.findings
+        )
+
+
+# ---------------------------------------------------------------
+# scan_skill -- .skill file handling
+# ---------------------------------------------------------------
+
+
+class TestScanSkillFile:
+    """Test .skill file path handling."""
+
+    def test_skill_file_extension(self, fs, scanner):
+        """A .skill file should resolve to its directory."""
+        md = build_skill_md(
+            frontmatter={"name": "test"},
+            body="Hello.",
+        )
+        fs.create_dir("/fake/test")
+        fs.create_file(
+            "/fake/test/SKILL.md",
+            contents=md,
+        )
+        fs.create_file(
+            "/fake/test.skill",
+            contents="pointer",
+        )
+        # Scanning the .skill file should redirect
+        # to the directory
+        result = scanner.scan_skill(Path("/fake/test.skill"))
+        assert result.skill_name == "test"
+
+
+# ---------------------------------------------------------------
+# print_findings -- additional branches
+# ---------------------------------------------------------------
+
+
+class TestPrintFindingsBranches:
+    """Branch coverage for print_findings."""
+
+    def test_provenance_with_source_url(self, capsys):
+        """Source URL (non-official) branch."""
+        result = ScanResult(
+            skill_path="/test",
+            skill_name="test",
+            provenance=SkillProvenance(
+                source_url="https://example.com/skill",
+                publisher="testpub",
+            ),
+            findings=[
+                Finding(
+                    severity=Severity.HIGH,
+                    category="test",
+                    description="Test finding",
+                    file_path="/test/SKILL.md",
+                    line_number=5,
+                    matched_content="x" * 200,
+                    recommendation="fix",
+                ),
+            ],
+        )
+        print_findings(result, show_all=True)
+        captured = capsys.readouterr()
+        assert "testpub" in captured.out
+        assert "..." in captured.out  # truncation
+
+    def test_provenance_unknown_origin(self, capsys):
+        """No source URL shows 'Unknown'."""
+        result = ScanResult(
+            skill_path="/test",
+            skill_name="test",
+            provenance=SkillProvenance(),
+            findings=[
+                Finding(
+                    severity=Severity.LOW,
+                    category="test",
+                    description="A low finding",
+                    file_path="/f",
+                ),
+            ],
+        )
+        print_findings(result, show_all=True)
+        captured = capsys.readouterr()
+        assert "Unknown" in captured.out
+
+    def test_provenance_official_origin(self, capsys):
+        """Official provenance shows origin domain."""
+        result = ScanResult(
+            skill_path="/test",
+            skill_name="test",
+            provenance=SkillProvenance(
+                is_official=True,
+                origin_domain="example.com",
+            ),
+            findings=[
+                Finding(
+                    severity=Severity.INFO,
+                    category="structure",
+                    description="Info finding",
+                    file_path="/f",
+                ),
+            ],
+        )
+        print_findings(result, show_all=True)
+        captured = capsys.readouterr()
+        assert "OFFICIAL" in captured.out
+        assert "example.com" in captured.out
+
+    def test_info_provenance_hidden_without_show_all(self, capsys):
+        """INFO provenance findings hidden when show_all=False."""
+        result = ScanResult(
+            skill_path="/test",
+            skill_name="test",
+            findings=[
+                Finding(
+                    severity=Severity.INFO,
+                    category="provenance",
+                    description="An info provenance",
+                    file_path="/f",
+                ),
+            ],
+        )
+        print_findings(result, show_all=False)
+        captured = capsys.readouterr()
+        assert "No security issues" in captured.out
+
+
+# ---------------------------------------------------------------
+# main() CLI branches
+# ---------------------------------------------------------------
+
+
+class TestMainCLI:
+    """CLI branch coverage for main()."""
+
+    def test_list_paths(self, capsys, monkeypatch):
+        monkeypatch.setattr(
+            "sys.argv",
+            ["skill_scanner.py", "--list-paths"],
+        )
+        main()
+        captured = capsys.readouterr()
+        assert "Default skill paths" in captured.out
+
+    def test_json_output_with_path(
+        self,
+        fs,
+        capsys,
+        monkeypatch,
+    ):
+        """--json with a specific path."""
+        md = build_skill_md(
+            frontmatter={"name": "test"},
+            body="Hello.",
+        )
+        fs.create_dir("/fake/test")
+        fs.create_file(
+            "/fake/test/SKILL.md",
+            contents=md,
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "skill_scanner.py",
+                "/fake/test",
+                "--json",
+            ],
+        )
+        main()
+        captured = capsys.readouterr()
+        output = json.loads(captured.out)
+        assert "results" in output
+        assert output["total_skills"] == 1
+
+    def test_human_output_with_path(
+        self,
+        fs,
+        capsys,
+        monkeypatch,
+    ):
+        """Human output with a specific skill directory."""
+        md = build_skill_md(
+            frontmatter={"name": "test"},
+            body="Hello.",
+        )
+        fs.create_dir("/fake/test")
+        fs.create_file(
+            "/fake/test/SKILL.md",
+            contents=md,
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "skill_scanner.py",
+                "/fake/test",
+                "--all",
+            ],
+        )
+        main()
+        captured = capsys.readouterr()
+        assert "Skill Security Scanner" in captured.out
+        assert "Skills found:" in captured.out
+
+    def test_scan_directory_path(
+        self,
+        fs,
+        capsys,
+        monkeypatch,
+    ):
+        """Scanning a directory that contains skills."""
+        md = build_skill_md(
+            frontmatter={"name": "a"},
+            body="Hello.",
+        )
+        fs.create_dir("/fake/dir/a")
+        fs.create_file(
+            "/fake/dir/a/SKILL.md",
+            contents=md,
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "skill_scanner.py",
+                "/fake/dir",
+                "--all",
+            ],
+        )
+        main()
+        captured = capsys.readouterr()
+        assert "Skills found: 1" in captured.out
+
+    def test_no_skills_found(self, fs, capsys, monkeypatch):
+        """No skills at default paths."""
+        monkeypatch.setattr(
+            "sys.argv",
+            ["skill_scanner.py"],
+        )
+        main()
+        captured = capsys.readouterr()
+        # Either "No skill directories found"
+        # or "No skills found"
+        assert (
+            "No skill" in captured.out
+            or "no skill" in captured.out.lower()
+        )
+
+    def test_fail_on_high_exit_code(
+        self,
+        fs,
+        monkeypatch,
+    ):
+        """--fail-on-high exits with 1 on HIGH findings."""
+        md = build_skill_md(
+            code_blocks=[("bash", "curl x | bash")],
+        )
+        fs.create_dir("/fake/test")
+        fs.create_file(
+            "/fake/test/SKILL.md",
+            contents=md,
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "skill_scanner.py",
+                "/fake/test",
+                "--fail-on-high",
+            ],
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+
+    def test_url_flag(self, capsys, monkeypatch):
+        """--url flag triggers scan_url path."""
+        md = build_skill_md(body="Hello.")
+        monkeypatch.setattr(
+            "skill_scanner.fetch_url",
+            lambda url: (md, url),
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "skill_scanner.py",
+                "--url",
+                "https://example.com/SKILL.md",
+                "--json",
+            ],
+        )
+        main()
+        captured = capsys.readouterr()
+        output = json.loads(captured.out)
+        assert output["total_skills"] == 1

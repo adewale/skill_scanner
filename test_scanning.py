@@ -814,6 +814,15 @@ class TestScanFile:
             severity=Severity.INFO,
         )
 
+    def test_scan_file_normal_filename_clean(self, fs, scanner):
+        """A file named README.md should not produce file_audit."""
+        fs.create_file("/fake/README.md", contents="# Hello\n")
+        findings = scanner.scan_file(Path("/fake/README.md"))
+        assert not _has_finding(
+            findings,
+            category="file_audit",
+        )
+
     def test_scan_file_unreadable(self, fs, scanner):
         """An unreadable file returns empty list, not a crash."""
         fs.create_file("/fake/secret.md", contents="data")
@@ -1148,8 +1157,10 @@ class TestNameDirectoryMismatch:
             if f.category == "validation"
             and "match" in f.description.lower()
         ]
-        assert len(mismatch) > 0
+        assert len(mismatch) == 1
         assert mismatch[0].severity == Severity.MEDIUM
+        assert "something-else" in mismatch[0].description
+        assert "my-skill" in mismatch[0].description
 
     def test_missing_name_field_flagged(self, fs, scanner):
         """Missing name field produces HIGH validation finding."""
@@ -1165,8 +1176,31 @@ class TestNameDirectoryMismatch:
             if f.category == "validation"
             and "missing" in f.description.lower()
         ]
-        assert len(missing) > 0
+        assert len(missing) == 1
         assert missing[0].severity == Severity.HIGH
+        assert "name" in missing[0].description.lower()
+
+    # -- false positives --
+    def test_normal_directory_not_flagged(self, fs, scanner):
+        """Skill with matching name/dir has no validation mismatch."""
+        md = build_skill_md(
+            frontmatter={
+                "name": "good-skill",
+                "description": "test",
+            },
+            body="Hello.",
+        )
+        fs.create_file(
+            "/fake/good-skill/SKILL.md",
+            contents=md,
+        )
+        result = scanner.scan_skill(Path("/fake/good-skill"))
+        val_findings = [
+            f
+            for f in result.findings
+            if f.category == "validation"
+        ]
+        assert len(val_findings) == 0
 
 
 # ================================================================
@@ -1699,7 +1733,126 @@ class TestDescriptionBodyOverlap:
             if f.category == "validation"
             and "align" in f.description.lower()
         ]
-        assert len(overlap_findings) > 0
+        assert len(overlap_findings) == 1
+        assert overlap_findings[0].severity == Severity.MEDIUM
+        assert "0%" in overlap_findings[0].description
+
+    def test_boundary_exactly_50_words_checked(self, fs, scanner):
+        """Body with exactly 50 unique 4+ char words is checked."""
+        # Use alpha-only words so regex \b[a-z]{4,}\b matches
+        alpha = "abcdefghijklmnopqrstuvwxyz"
+        words = []
+        for i in range(50):
+            a, b = divmod(i, 26)
+            words.append(alpha[b] * 4 + alpha[a % 26])
+        body = " ".join(words) + "."
+        md = build_skill_md(
+            frontmatter={
+                "name": "test",
+                "description": "Totally unrelated zebra quantum",
+            },
+            body=body,
+        )
+        fs.create_file("/fake/test/SKILL.md", contents=md)
+        result = scanner.scan_skill(Path("/fake/test"))
+        overlap_findings = [
+            f
+            for f in result.findings
+            if f.category == "validation"
+            and "align" in f.description.lower()
+        ]
+        assert len(overlap_findings) == 1
+
+    def test_boundary_49_words_skipped(self, fs, scanner):
+        """Body with 49 unique 4+ char words is below threshold."""
+        alpha = "abcdefghijklmnopqrstuvwxyz"
+        words = []
+        for i in range(49):
+            a, b = divmod(i, 26)
+            words.append(alpha[b] * 4 + alpha[a % 26])
+        body = " ".join(words) + "."
+        md = build_skill_md(
+            frontmatter={
+                "name": "test",
+                "description": "Totally unrelated zebra quantum",
+            },
+            body=body,
+        )
+        fs.create_file("/fake/test/SKILL.md", contents=md)
+        result = scanner.scan_skill(Path("/fake/test"))
+        overlap_findings = [
+            f
+            for f in result.findings
+            if f.category == "validation"
+            and "align" in f.description.lower()
+        ]
+        assert len(overlap_findings) == 0
+
+    def test_boundary_ratio_at_threshold(self, fs, scanner):
+        """Overlap ratio exactly at 0.1 should NOT flag."""
+        # 10 desc words, 1 overlapping = 0.1 ratio
+        desc_words = [
+            "alpha", "bravo", "charlie", "delta",
+            "echo", "foxtrot", "golf", "hotel",
+            "india", "juliet",
+        ]
+        # 60+ body words, with exactly 1 overlap
+        body_words = ["alpha"] + [
+            f"zulu{chr(97 + i)}" for i in range(26)
+        ] + [
+            f"papa{chr(97 + i)}" for i in range(26)
+        ] + ["xylophone", "yakitori", "zeppelin"]
+        md = build_skill_md(
+            frontmatter={
+                "name": "test",
+                "description": " ".join(desc_words),
+            },
+            body=" ".join(body_words) + ".",
+        )
+        fs.create_file("/fake/test/SKILL.md", contents=md)
+        result = scanner.scan_skill(Path("/fake/test"))
+        overlap_findings = [
+            f
+            for f in result.findings
+            if f.category == "validation"
+            and "align" in f.description.lower()
+        ]
+        # ratio = 1/10 = 0.1, NOT < 0.1, so no finding
+        assert len(overlap_findings) == 0
+
+    def test_boundary_ratio_just_below_threshold(
+        self,
+        fs,
+        scanner,
+    ):
+        """Overlap ratio at 0.0 (zero overlap) should flag."""
+        desc_words = [
+            "alpha", "bravo", "charlie", "delta",
+            "echo", "foxtrot", "golf", "hotel",
+            "india", "juliet",
+        ]
+        body_words = [
+            f"zulu{chr(97 + i)}" for i in range(26)
+        ] + [
+            f"papa{chr(97 + i)}" for i in range(26)
+        ] + ["xylophone", "yakitori", "zeppelin"]
+        md = build_skill_md(
+            frontmatter={
+                "name": "test",
+                "description": " ".join(desc_words),
+            },
+            body=" ".join(body_words) + ".",
+        )
+        fs.create_file("/fake/test/SKILL.md", contents=md)
+        result = scanner.scan_skill(Path("/fake/test"))
+        overlap_findings = [
+            f
+            for f in result.findings
+            if f.category == "validation"
+            and "align" in f.description.lower()
+        ]
+        # ratio = 0/10 = 0.0, should flag
+        assert len(overlap_findings) == 1
 
     def test_short_body_skipped(self, fs, scanner):
         """Short body (< 50 words) should skip overlap check."""
