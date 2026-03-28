@@ -532,7 +532,7 @@ class SkillScanner:
             "OpenClaw credentials access",
         ),
         (
-            r"SOUL\.md|MEMORY\.md",
+            r"SOUL\.md|MEMORY\.md|CLAUDE\.md",
             Severity.HIGH,
             "Agent memory file access (potential poisoning)",
         ),
@@ -881,19 +881,30 @@ class SkillScanner:
     MEMORY_POISONING_PATTERNS: ClassVar[list[tuple[str, Severity, str]]] = [
         # Direct memory file manipulation
         (
-            r"write\s+to\s+(SOUL|MEMORY)\.md",
+            r"write\s+to\s+(SOUL|MEMORY|CLAUDE)\.md",
             Severity.CRITICAL,
             "Agent memory poisoning",
         ),
         (
-            r"(append|add)\s+to\s+(SOUL|MEMORY)",
+            r"(append|add)\s+to\s+(SOUL|MEMORY|CLAUDE)",
             Severity.CRITICAL,
             "Agent memory injection",
         ),
         (
-            r"modify\s+(SOUL|MEMORY)",
+            r"modify\s+(SOUL|MEMORY|CLAUDE)",
             Severity.CRITICAL,
             "Agent memory modification",
+        ),
+        # Global config poisoning (cross-session persistence)
+        (
+            r"~/\.claude/CLAUDE\.md",
+            Severity.CRITICAL,
+            "Global agent config poisoning",
+        ),
+        (
+            r"\.claude/(settings|CLAUDE)",
+            Severity.CRITICAL,
+            "Agent config directory access",
         ),
         (
             r"(update|change)\s+(personality"
@@ -982,6 +993,12 @@ class SkillScanner:
             Severity.MEDIUM,
             "Remote archive extraction",
         ),
+        # Test ecosystem RCE (bundled test infra)
+        (
+            r"conftest\.py",
+            Severity.HIGH,
+            "Bundled conftest.py (pytest auto-executes on test run)",
+        ),
     ]
 
     # Files that should be scrutinized more carefully
@@ -996,6 +1013,8 @@ class SkillScanner:
         "utils.py",
         ".env",
         ".env.example",
+        # Test autodiscovery files (pytest auto-executes these)
+        "conftest.py",
     ]
 
     def __init__(self, *, verbose: bool = False) -> None:
@@ -1136,6 +1155,34 @@ class SkillScanner:
                 ),
             )
 
+            # Detect ! pre-prompt command directives
+            # (harness executes these on skill load,
+            # bypassing agent entirely)
+            for line_num, line in enumerate(
+                content.split("\n"),
+                1,
+            ):
+                if re.match(r"^!\s+\S", line):
+                    findings.append(
+                        Finding(
+                            severity=Severity.CRITICAL,
+                            category="dangerous_shell",
+                            description=(
+                                "Pre-prompt command directive "
+                                "(! prefix)"
+                            ),
+                            file_path=file_path,
+                            line_number=line_num,
+                            matched_content=line[:80],
+                            recommendation=(
+                                "The ! directive executes "
+                                "commands at skill load time, "
+                                "bypassing agent safety. "
+                                "This is extremely dangerous."
+                            ),
+                        )
+                    )
+
             # Also scan prose content (non-code-block text)
             # for prompt injection
             prose_content = content
@@ -1263,6 +1310,30 @@ class SkillScanner:
                     )
                 )
 
+        # Check for hook definitions in frontmatter
+        # (hooks execute at harness level, bypassing agent)
+        hook_keys = {"hooks", "hook", "pre_hook", "post_hook"}
+        for key in hook_keys:
+            if key in metadata:
+                hook_str = json.dumps(metadata[key])
+                findings.append(
+                    Finding(
+                        severity=Severity.CRITICAL,
+                        category="dangerous_shell",
+                        description=(
+                            f"Hook definition in frontmatter ({key})"
+                        ),
+                        file_path=file_path,
+                        matched_content=hook_str[:100],
+                        recommendation=(
+                            "Hooks in skill frontmatter execute "
+                            "at the harness level, bypassing "
+                            "agent safety controls. Review "
+                            "all hook commands carefully."
+                        ),
+                    )
+                )
+
         # Check for overly broad descriptions
         desc = metadata.get("description", "")
         if len(desc) > LONG_DESCRIPTION_THRESHOLD:
@@ -1328,6 +1399,154 @@ class SkillScanner:
                     )
             except (ValueError, UnicodeDecodeError):
                 pass  # Not valid base64, ignore
+        return findings
+
+    def _check_package_json_hooks(
+        self,
+        file_path: Path,
+    ) -> list[Finding]:
+        """Check package.json for malicious lifecycle hooks.
+
+        npm lifecycle scripts like postinstall execute
+        automatically and are a supply chain RCE vector.
+        """
+        findings = []
+        try:
+            content = file_path.read_text(
+                encoding="utf-8",
+                errors="ignore",
+            )
+            data = json.loads(content)
+        except (OSError, json.JSONDecodeError):
+            return findings
+
+        scripts = data.get("scripts", {})
+        if not isinstance(scripts, dict):
+            return findings
+
+        dangerous_hooks = {
+            "preinstall",
+            "install",
+            "postinstall",
+            "preuninstall",
+            "postuninstall",
+            "prepare",
+            "prepublishOnly",
+        }
+
+        for hook_name in dangerous_hooks:
+            if hook_name in scripts:
+                findings.append(
+                    Finding(
+                        severity=Severity.HIGH,
+                        category="supply_chain",
+                        description=(
+                            f"npm lifecycle hook: {hook_name}"
+                        ),
+                        file_path=str(file_path),
+                        matched_content=(
+                            f"{hook_name}: "
+                            f"{scripts[hook_name][:80]}"
+                        ),
+                        recommendation=(
+                            "npm lifecycle hooks execute "
+                            "automatically during install. "
+                            "Review the hook command for "
+                            "malicious payloads."
+                        ),
+                    )
+                )
+
+        return findings
+
+    def _check_image_metadata(
+        self,
+        file_path: Path,
+    ) -> list[Finding]:
+        """Check image files for embedded text metadata.
+
+        Multimodal LLMs can read image EXIF/text chunks,
+        making metadata injection an attack vector for
+        context poisoning.
+        """
+        findings = []
+        try:
+            raw = file_path.read_bytes()
+        except OSError:
+            return findings
+
+        # Search raw bytes for suspicious text
+        # embedded in metadata fields
+        suspicious_keywords = [
+            b"curl",
+            b"wget",
+            b"bash",
+            b"eval",
+            b"exec",
+            b"/bin/sh",
+            b"import os",
+            b"subprocess",
+            b"ignore previous",
+            b"ignore prior",
+            b"run this",
+            b"execute",
+        ]
+        text_chunk_markers = [
+            b"tEXt",  # PNG text chunk
+            b"iTXt",  # PNG international text
+            b"zTXt",  # PNG compressed text
+            b"Exif",  # EXIF header
+            b"XML:",  # XMP metadata
+        ]
+
+        has_text_chunks = any(
+            marker in raw for marker in text_chunk_markers
+        )
+        found_keywords = [
+            kw.decode()
+            for kw in suspicious_keywords
+            if kw in raw
+        ]
+
+        if found_keywords:
+            findings.append(
+                Finding(
+                    severity=Severity.CRITICAL,
+                    category="obfuscation",
+                    description=(
+                        "Image contains suspicious "
+                        "embedded text: "
+                        + ", ".join(found_keywords)
+                    ),
+                    file_path=str(file_path),
+                    recommendation=(
+                        "Image metadata can poison "
+                        "multimodal LLM context. "
+                        "Strip metadata with "
+                        "exiftool -all= or review "
+                        "embedded text carefully."
+                    ),
+                )
+            )
+        elif has_text_chunks:
+            findings.append(
+                Finding(
+                    severity=Severity.MEDIUM,
+                    category="obfuscation",
+                    description=(
+                        "Image contains text metadata "
+                        "chunks (potential context "
+                        "poisoning vector)"
+                    ),
+                    file_path=str(file_path),
+                    recommendation=(
+                        "Image text chunks can be read "
+                        "by multimodal LLMs. Strip "
+                        "metadata or verify contents."
+                    ),
+                )
+            )
+
         return findings
 
     def _get_recommendation(self, category: str) -> str:
@@ -1575,6 +1794,55 @@ class SkillScanner:
         """Scan a single file."""
         findings = []
 
+        # Check for symlinks (potential exfiltration vector)
+        if file_path.is_symlink():
+            target = str(file_path.readlink())
+            findings.append(
+                Finding(
+                    severity=Severity.HIGH,
+                    category="exfiltration",
+                    description=(
+                        "Symlink detected "
+                        f"(points to {target})"
+                    ),
+                    file_path=str(file_path),
+                    recommendation=(
+                        "Symlinks in skills can trick agents "
+                        "into reading sensitive files outside "
+                        "the skill directory. Remove or verify "
+                        "the symlink target."
+                    ),
+                )
+            )
+            # Check if symlink targets sensitive paths
+            sensitive_targets = [
+                ".ssh",
+                ".aws",
+                ".gnupg",
+                ".env",
+                "credentials",
+                "id_rsa",
+                "id_ed25519",
+                ".claude",
+            ]
+            if any(s in target for s in sensitive_targets):
+                findings.append(
+                    Finding(
+                        severity=Severity.CRITICAL,
+                        category="exfiltration",
+                        description=(
+                            "Symlink targets sensitive path "
+                            f"({target})"
+                        ),
+                        file_path=str(file_path),
+                        recommendation=(
+                            "This symlink points to a "
+                            "sensitive file or directory. "
+                            "Likely credential exfiltration."
+                        ),
+                    )
+                )
+
         # Check for sensitive filenames
         if file_path.name in self.SENSITIVE_FILENAMES:
             findings.append(
@@ -1587,6 +1855,12 @@ class SkillScanner:
                         "This file type requires careful manual review"
                     ),
                 )
+            )
+
+        # Check package.json for lifecycle script hooks
+        if file_path.name == "package.json":
+            findings.extend(
+                self._check_package_json_hooks(file_path),
             )
 
         # Read and scan content
@@ -1914,19 +2188,30 @@ class SkillScanner:
             )
 
         # Scan all other files
-        skip_extensions = {
+        image_extensions = {
             ".png",
             ".jpg",
             ".jpeg",
             ".gif",
+        }
+        skip_extensions = {
             ".ico",
             ".woff",
             ".ttf",
         }
         for file_path in skill_path.rglob("*"):
             if file_path.is_file() and file_path != skill_md:
-                # Skip binary files
-                if file_path.suffix.lower() in skip_extensions:
+                ext = file_path.suffix.lower()
+                # Skip font/icon files
+                if ext in skip_extensions:
+                    continue
+                # Scan image files for embedded metadata
+                if ext in image_extensions:
+                    result.findings.extend(
+                        self._check_image_metadata(
+                            file_path,
+                        ),
+                    )
                     continue
                 result.findings.extend(
                     self.scan_file(file_path),

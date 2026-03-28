@@ -112,6 +112,7 @@ Based on research from:
 | Password-protected archive extraction | HIGH | ✅ Yes | Regex pattern |
 | Remote archive extraction | MEDIUM | ✅ Yes | Regex pattern |
 | Binary dependency declarations in metadata | LOW | ✅ Yes | AST frontmatter check |
+| Bundled conftest.py (pytest auto-execution) | HIGH | ✅ Yes | Regex pattern + sensitive filename |
 | Typosquatted package names | — | ❌ No | Would need package DB |
 | Compromised upstream repos | — | ❌ No | Would need provenance |
 | Rug-pull attacks (post-install malicious updates) | — | ❌ No | Would need monitoring |
@@ -152,6 +153,8 @@ Based on research from:
 | "Remember this instruction" injection | MEDIUM | ✅ Yes | Regex pattern |
 | "From now on always..." persistent change | MEDIUM | ✅ Yes | Regex pattern |
 | "Add this to your memory/context" | HIGH | ✅ Yes | Regex pattern |
+| Write to ~/.claude/CLAUDE.md (global config) | CRITICAL | ✅ Yes | Regex pattern |
+| Access .claude/ settings directory | CRITICAL | ✅ Yes | Regex pattern |
 | Time-delayed staged attacks | — | ⚠️ Partial | Detects memory writes |
 | Cross-session behavioral backdoors | — | ⚠️ Partial | Detects memory writes |
 
@@ -180,11 +183,11 @@ Based on research from:
 | Data Exfiltration | 19 | 19 | **100%** |
 | Suspicious URLs | 14 | 14 | **100%** |
 | Obfuscation | 12 | 10 | **83%** |
-| Supply Chain | 15 | 11 | **73%** |
+| Supply Chain | 15 | 12 | **80%** |
 | Prompt Injection | 19 | 16 | **84%** |
-| Memory Poisoning | 10 | 7 | **70%** |
+| Memory Poisoning | 10 | 9 | **90%** |
 | Social Engineering | 10 | 8 | **80%** |
-| **Total** | **116** | **102** | **88%** |
+| **Total** | **116** | **105** | **91%** |
 
 ---
 
