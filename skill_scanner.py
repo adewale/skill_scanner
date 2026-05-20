@@ -498,6 +498,7 @@ EXECUTABLE_LANGUAGES = {
     "shell",
     "zsh",
     "powershell",
+    "pwsh",
     "ps1",
     "cmd",
     "bat",
@@ -1519,6 +1520,9 @@ class SkillScanner:
                 self.scan_code_blocks(ast, file_path),
             )
             findings.extend(
+                self.scan_code_spans(ast, file_path),
+            )
+            findings.extend(
                 self.scan_hidden_content(ast, file_path),
             )
             findings.extend(
@@ -1921,6 +1925,7 @@ class SkillScanner:
         result = {
             "frontmatter": None,
             "code_blocks": [],
+            "code_spans": [],
             "headings": [],
             "links": [],
             "html_comments": [],
@@ -1948,14 +1953,19 @@ class SkillScanner:
         for token in tokens:
             if token.type == "heading_open":
                 current_heading = token.tag
-            elif token.type == "inline" and current_heading:
-                result["headings"].append(
-                    {
-                        "level": current_heading,
-                        "text": token.content,
-                    }
-                )
-                current_heading = None
+            elif token.type == "inline":
+                if current_heading:
+                    result["headings"].append(
+                        {
+                            "level": current_heading,
+                            "text": token.content,
+                        }
+                    )
+                    current_heading = None
+                # Inline code spans are author-marked code
+                for child in token.children or []:
+                    if child.type == "code_inline":
+                        result["code_spans"].append(child.content)
             elif token.type == "fence":
                 result["code_blocks"].append(
                     {
@@ -2068,6 +2078,57 @@ class SkillScanner:
                         )
                     )
 
+        return findings
+
+    def scan_code_spans(
+        self,
+        ast: dict,
+        file_path: str,
+    ) -> list[Finding]:
+        """Scan inline code spans (backtick text) for code patterns.
+
+        Inline code is author-marked code, so it is scanned with the
+        execution/exfiltration/obfuscation/URL categories at full
+        severity. The injection, memory, social-engineering, and
+        supply-chain categories are already covered by the prose scan
+        (inline code text remains in the prose stream).
+        """
+        code_span_patterns = (
+            [(*p, "dangerous_shell") for p in self.DANGEROUS_SHELL_PATTERNS]
+            + [(*p, "exfiltration") for p in self.EXFILTRATION_PATTERNS]
+            + [(*p, "obfuscation") for p in self.OBFUSCATION_PATTERNS]
+            + [(*p, "suspicious_url") for p in self.SUSPICIOUS_URL_PATTERNS]
+        )
+        findings = []
+        for span in ast.get("code_spans", []):
+            for (
+                pattern,
+                severity,
+                description,
+                category,
+            ) in code_span_patterns:
+                if not re.search(pattern, span, re.IGNORECASE):
+                    continue
+                if self._should_skip_finding(
+                    pattern,
+                    description,
+                    span,
+                    "",
+                    category,
+                ):
+                    continue
+                findings.append(
+                    Finding(
+                        severity=severity,
+                        category=category,
+                        description=(f"{description} (in inline code)"),
+                        file_path=file_path,
+                        matched_content=span[:80],
+                        recommendation=self._get_recommendation(
+                            category,
+                        ),
+                    )
+                )
         return findings
 
     def scan_hidden_content(

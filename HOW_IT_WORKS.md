@@ -25,7 +25,7 @@ Matches are mapped back to the original bytes so findings still show the raw, ob
 
 ## Detection Engine
 
-The core is **272+ regex patterns across 8 categories**: dangerous shell commands, data exfiltration, suspicious URLs, obfuscation, social engineering, prompt injection, memory poisoning, and supply chain risks. Each pattern has a severity (CRITICAL through INFO).
+The core is **116 compiled regex patterns across 8 categories**: dangerous shell commands, data exfiltration, suspicious URLs, obfuscation, social engineering, prompt injection, memory poisoning, and supply chain risks. Each pattern has a severity (CRITICAL through INFO). AST-based heuristics (base64-blob decoding, unmarked code blocks, hidden HTML comments, frontmatter checks) supplement the regex layer.
 
 Three layers reduce false positives:
 

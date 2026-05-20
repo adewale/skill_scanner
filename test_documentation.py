@@ -109,21 +109,26 @@ class TestReadmeCLIFlags:
 
 
 class TestHowItWorksPatternCount:
-    """HOW_IT_WORKS.md claims '272+ patterns' -- verify lower bound."""
+    """HOW_IT_WORKS.md states the compiled regex pattern count."""
 
     def test_pattern_count_at_least_90(self):
         """all_patterns is a list of tuples (one per compiled regex).
-        The doc says 272+ patterns but that counts threat table rows
-        including non-regex detections; the compiled regex list should
-        have >= 90 entries (actual: 97)."""
+        Assert a stable lower bound (currently 116 patterns)."""
         scanner = SkillScanner()
         assert len(scanner.all_patterns) >= 90, (
             f"Expected >= 90 compiled patterns, got {len(scanner.all_patterns)}"
         )
 
-    def test_how_it_works_claims_272_plus(self):
+    def test_how_it_works_states_pattern_count(self):
+        """The doc must state the exact compiled pattern count so it
+        stays in sync with the code (documentation-drift guard)."""
         doc = _read("HOW_IT_WORKS.md")
-        assert "272" in doc
+        scanner = SkillScanner()
+        count = len(scanner.all_patterns)
+        assert str(count) in doc, (
+            f"HOW_IT_WORKS.md must mention the compiled pattern count "
+            f"({count})"
+        )
 
 
 class TestHowItWorksFunctionReferences:

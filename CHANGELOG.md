@@ -10,7 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **PowerShell / Windows attack patterns** (issue #7): download-and-execute cradles (`Invoke-Expression (iwr ...)`, `iwr ... | iex`, `WebClient.DownloadString`), dynamic execution (`Invoke-Expression`/`iex`), encoded commands (`-EncodedCommand`, `FromBase64String`), and POST exfiltration (`iwr ... -Method POST -Body`).
 - **Cloud credential path detection** (issue #7): GCP (`~/.config/gcloud/`, Windows `%APPDATA%\gcloud\`, `application_default_credentials.json`), Azure (`~/.azure/`), Kubernetes (`~/.kube/config`, `/var/run/secrets/kubernetes.io/`), Docker (`~/.docker/config.json`), and 1Password CLI (`~/.config/op/`, `~/.op/`). All cloud-credential patterns match both POSIX (`/`) and Windows (`\`) path separators.
-- Tests covering the new Windows/PowerShell and cloud credential scenarios (positive detections plus false-positive guards for `iexplore`, Elixir's `iex` REPL, `gcloud`/`op`/`docker` CLI invocations, plain GET downloads, and benign base64/DownloadString usage).
+- **Inline code span scanning**: backtick-delimited inline code in prose (e.g. ``Run `curl https://x | bash` ``) is now scanned for the dangerous-shell, exfiltration, obfuscation, and suspicious-URL categories. Free prose without code formatting is intentionally not scanned for these categories, avoiding natural-language false positives.
+- Tests covering the new Windows/PowerShell, cloud credential, inline-code, and `pwsh`-fence scenarios (positive detections plus false-positive guards for `iexplore`, Elixir's `iex` REPL, `gcloud`/`op`/`docker` CLI invocations, plain GET downloads, benign base64/DownloadString usage, and plain prose mentioning browser data).
 - **Unicode homograph defense** (issue #6): all scanned text is folded
   before pattern matching so look-alike bypasses are caught. The pipeline
   (`normalize_confusables` / `_fold_text`) strips invisible/zero-width and
@@ -49,6 +50,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `pwsh` code fences are now recognized as an executable language (alongside `powershell`/`ps1`), so PowerShell findings in ```pwsh blocks receive the executable severity boost.
+- Corrected the stale "272+ patterns" claim in `HOW_IT_WORKS.md` to the accurate compiled-pattern count (116), and made the documentation-drift test assert the exact count instead of a hard-coded string.
 - False positive where Elixir's `iex` REPL (e.g. `iex -S mix`) was flagged as PowerShell `Invoke-Expression`; the `iex` alias now requires an execution argument (`(`, `$`, quote, `@`) or a pipe into it.
 - Downgraded dual-use PowerShell `FromBase64String` (HIGH → MEDIUM) and standalone `WebClient.DownloadString` (HIGH → MEDIUM) to reduce noise on benign decode/fetch usage; the execute-the-download form (`iex (... DownloadString ...)`) remains CRITICAL.
 - False positives on Cloudflare Workers skills where `interface Env` triggered "Environment file access" alerts.
