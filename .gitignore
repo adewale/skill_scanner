@@ -34,6 +34,9 @@ env/
 venv/
 ENV/
 
+# uv (lock file generated locally; deps are pinned in pyproject/inline script)
+uv.lock
+
 # IDE
 .idea/
 .vscode/
