@@ -68,11 +68,15 @@ uv run skill_scanner.py --list-paths
 - **dangerous_shell** -- piped execution, reverse shells, privilege escalation
 - **exfiltration** -- access to SSH keys, AWS credentials, browser data, crypto wallets
 - **suspicious_url** -- URL shorteners, paste sites, direct IP URLs
-- **obfuscation** -- base64 payloads, eval/exec, hex-encoded strings
+- **obfuscation** -- base64 payloads, eval/exec, hex-encoded strings, Unicode homoglyphs
 - **social_engineering** -- urgency tactics, copy-paste-run instructions
 - **prompt_injection** -- guardrail bypass, role manipulation, hidden instructions
 - **memory_poisoning** -- persistent agent memory/behavior modification
 - **supply_chain** -- unpinned dependencies, remote binary downloads
+
+## Evasion resistance
+
+All text is Unicode-normalized before matching, so look-alike bypasses are caught: invisible/zero-width and bidi characters are stripped, NFKC folds full-width and mathematical variants, and cross-script homoglyphs (e.g. Cyrillic `с` for Latin `c` in `curl`) plus multi-character look-alikes (`rn` -> `m`) are folded back to ASCII. Mixed-script tokens and punycode (`xn--`) IDN homograph domains are flagged even when a specific look-alike is not in the map.
 
 ## References
 

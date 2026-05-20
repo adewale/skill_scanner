@@ -112,10 +112,16 @@ def fetch_url(url: str) -> tuple[str, str]:
 # === UNICODE NORMALIZATION (HOMOGRAPH DEFENSE) ===
 # Detection regexes are written in ASCII, so an attacker can bypass
 # them with visually identical characters from other scripts -- e.g.
-# Cyrillic "es" (U+0441) instead of Latin "c" in "curl". Before
-# matching, text is normalized: NFKC folds full-width / mathematical /
-# ligature variants, then the confusable map below folds cross-script
-# homoglyphs that NFKC leaves untouched.
+# Cyrillic "es" (U+0441) instead of Latin "c" in "curl" -- or by
+# splitting a keyword with invisible characters (zero-width spaces,
+# bidi controls). Before matching, text is folded by _fold_text():
+#   1. invisible / zero-width / bidi control characters are dropped;
+#   2. NFKC folds full-width / mathematical / ligature variants;
+#   3. the single-character confusable map below folds cross-script
+#      homoglyphs NFKC leaves untouched;
+#   4. the multi-character map folds sequences like "rn" -> "m".
+# A separate, map-independent mixed-script check (_check_homoglyphs)
+# catches confusables that are not in the table at all.
 #
 # Each key is the confusable character itself; the trailing comment
 # names its Unicode code point. The table only needs the cross-script
@@ -195,6 +201,14 @@ CONFUSABLE_CHARS: dict[str, str] = {
     # --- Other Latin look-alikes NFKC does not fold ---
     "ı": "i",  # LATIN SMALL LETTER DOTLESS I
     "ɡ": "g",  # LATIN SMALL LETTER SCRIPT G
+    "ɗ": "d",  # LATIN SMALL LETTER D WITH HOOK
+    "ƅ": "b",  # LATIN SMALL LETTER TONE SIX
+    "ɠ": "g",  # LATIN SMALL LETTER G WITH HOOK
+    "ӏ": "l",  # CYRILLIC SMALL LETTER PALOCHKA
+    # --- Armenian look-alikes ---
+    "ո": "n",  # ARMENIAN SMALL LETTER VO
+    "օ": "o",  # ARMENIAN SMALL LETTER OH
+    "ս": "u",  # ARMENIAN SMALL LETTER SEH
     # --- Command-syntax punctuation look-alikes ---
     "∕": "/",  # DIVISION SLASH
     "⁄": "/",  # FRACTION SLASH
@@ -215,6 +229,33 @@ CONFUSABLE_CHARS: dict[str, str] = {
 }
 
 _CONFUSABLE_TRANSLATION = str.maketrans(CONFUSABLE_CHARS)
+
+# Multi-character confusables: short sequences that imitate a single
+# ASCII letter in many fonts (e.g. "rn" -> "m"). Folded after the
+# single-character map, so e.g. "chrnod" is matched as "chmod".
+MULTI_CHAR_CONFUSABLES: dict[str, str] = {
+    "rn": "m",
+    "vv": "w",
+    "cl": "d",
+}
+_MULTI_CHAR_LENGTHS = sorted(
+    {len(k) for k in MULTI_CHAR_CONFUSABLES},
+    reverse=True,
+)
+
+# Scripts whose letters are commonly used as Latin look-alikes. A token
+# mixing Latin with any of these is treated as a homograph even when the
+# specific code point is absent from CONFUSABLE_CHARS.
+_LOOKALIKE_SCRIPTS = frozenset(
+    {
+        "CYRILLIC",
+        "GREEK",
+        "COPTIC",
+        "ARMENIAN",
+        "CHEROKEE",
+        "GEORGIAN",
+    }
+)
 
 # Sensitive tokens. A run of confusables that folds exactly to one of
 # these is flagged even when it is not mixed-script: a wholly non-Latin
@@ -254,15 +295,126 @@ HOMOGLYPH_KEYWORDS: frozenset[str] = frozenset(
 )
 
 
+def _is_invisible(char: str) -> bool:
+    """True for zero-width, bidi-control and other invisible code points.
+
+    These carry no visible glyph and are a common way to break up a
+    keyword (e.g. a zero-width space inside ``curl``), so they are
+    dropped before matching.
+    """
+    cp = ord(char)
+    return (
+        cp == 0x00AD  # SOFT HYPHEN
+        or cp == 0x034F  # COMBINING GRAPHEME JOINER
+        or cp == 0x061C  # ARABIC LETTER MARK
+        or 0x200B <= cp <= 0x200F  # ZWSP, ZWNJ, ZWJ, LRM, RLM
+        or 0x202A <= cp <= 0x202E  # bidi embeddings / overrides
+        or 0x2060 <= cp <= 0x2064  # word joiner, invisible operators
+        or 0x2066 <= cp <= 0x2069  # bidi isolates
+        or 0xFE00 <= cp <= 0xFE0F  # variation selectors
+        or cp == 0x180E  # MONGOLIAN VOWEL SEPARATOR
+        or cp == 0xFEFF  # ZERO WIDTH NO-BREAK SPACE / BOM
+    )
+
+
+def _script_of(char: str) -> str | None:
+    """Best-effort Unicode script for a character (no external data).
+
+    Approximated from the character's Unicode name prefix, which is good
+    enough to tell Latin from Cyrillic/Greek/Armenian/... for homograph
+    detection. Returns None for characters with no assigned name.
+    """
+    try:
+        name = unicodedata.name(char)
+    except ValueError:
+        return None
+    return name.split(" ", 1)[0]
+
+
+def _fold_text(text: str) -> tuple[str, list[int] | None]:
+    """Fold text for matching and map each output char to its source.
+
+    Drops invisible characters, applies NFKC, then the single- and
+    multi-character confusable maps. Returns ``(folded, offsets)`` where
+    ``offsets[i]`` is the index in ``text`` that produced ``folded[i]``.
+    ``offsets`` is None only when the text is unchanged and ASCII-clean
+    (no invisible or multi-character confusables), in which case the
+    identity mapping applies.
+    """
+    # Fast path: ASCII with no multi-character confusable sequence is
+    # returned unchanged (offsets = identity).
+    if text.isascii() and not any(
+        seq in text.lower() for seq in MULTI_CHAR_CONFUSABLES
+    ):
+        return text, None
+
+    chars: list[str] = []
+    offsets: list[int] = []
+    for i, ch in enumerate(text):
+        if _is_invisible(ch):
+            continue
+        if ch.isascii():
+            folded = ch
+        else:
+            folded = unicodedata.normalize("NFKC", ch).translate(
+                _CONFUSABLE_TRANSLATION,
+            )
+        for fc in folded:
+            chars.append(fc)
+            offsets.append(i)
+
+    # Multi-character confusable pass, preserving source offsets.
+    out_chars: list[str] = []
+    out_offsets: list[int] = []
+    j = 0
+    n = len(chars)
+    while j < n:
+        repl = None
+        for klen in _MULTI_CHAR_LENGTHS:
+            if j + klen <= n:
+                seq = "".join(chars[j : j + klen]).lower()
+                repl = MULTI_CHAR_CONFUSABLES.get(seq)
+                if repl is not None:
+                    out_chars.append(repl)
+                    out_offsets.append(offsets[j])
+                    j += klen
+                    break
+        if repl is None:
+            out_chars.append(chars[j])
+            out_offsets.append(offsets[j])
+            j += 1
+
+    return "".join(out_chars), out_offsets
+
+
 def normalize_confusables(text: str) -> str:
     """Fold Unicode look-alikes to ASCII for robust pattern matching.
 
-    Applies NFKC normalization followed by the confusable-character
-    map. The result is intended for detection only, not for display.
+    Strips invisible characters, applies NFKC, then the single- and
+    multi-character confusable maps. The result is for detection only,
+    not for display.
     """
-    return unicodedata.normalize("NFKC", text).translate(
-        _CONFUSABLE_TRANSLATION,
-    )
+    return _fold_text(text)[0]
+
+
+def _raw_span(
+    original: str,
+    offsets: list[int] | None,
+    start: int,
+    end: int,
+) -> str:
+    """Map a ``[start, end)`` span in folded text back to ``original``.
+
+    ``offsets`` is the map from :func:`_fold_text` (None means the folded
+    text equals ``original``).
+    """
+    if offsets is None:
+        return original[start:end]
+    if start >= len(offsets):
+        return ""
+    lo = offsets[start]
+    hi = offsets[min(end, len(offsets)) - 1]
+    return original[lo : hi + 1]
 
 
 class Severity(Enum):
@@ -1295,13 +1447,13 @@ class SkillScanner:
 
             # Also scan prose content (non-code-block text)
             # for prompt injection
-            prose_content = content
+            raw_prose = content
             for block in ast.get("code_blocks", []):
-                prose_content = prose_content.replace(
+                raw_prose = raw_prose.replace(
                     block.get("content", ""),
                     "",
                 )
-            prose_content = normalize_confusables(prose_content)
+            prose_content, prose_offsets = _fold_text(raw_prose)
 
             # Scan prose for prompt injection,
             # memory poisoning, social engineering,
@@ -1335,7 +1487,12 @@ class SkillScanner:
                             category=category,
                             description=(f"{description} (in prose)"),
                             file_path=file_path,
-                            matched_content=(match.group(0)[:80]),
+                            matched_content=_raw_span(
+                                raw_prose,
+                                prose_offsets,
+                                match.start(),
+                                match.end(),
+                            )[:80],
                             recommendation=(
                                 self._get_recommendation(
                                     category,
@@ -1351,21 +1508,22 @@ class SkillScanner:
                 )
         else:
             # For non-markdown files, line-by-line scanning.
-            # Normalize each line so homograph/confusable bypasses
-            # are matched while line numbers stay accurate.
-            lines = [
-                normalize_confusables(line) for line in content.split("\n")
-            ]
+            # Fold each line so homograph/confusable bypasses are matched
+            # while line numbers stay accurate and the reported match is
+            # mapped back to the raw (un-folded) source text.
+            raw_lines = content.split("\n")
+            folded_lines = [_fold_text(rl) for rl in raw_lines]
             for (
                 pattern,
                 severity,
                 description,
                 category,
             ) in self.all_patterns:
-                for line_num, line in enumerate(
-                    lines,
+                for line_num, (raw_line, folded) in enumerate(
+                    zip(raw_lines, folded_lines, strict=True),
                     1,
                 ):
+                    folded_line, line_offsets = folded
                     findings.extend(
                         [
                             Finding(
@@ -1374,7 +1532,12 @@ class SkillScanner:
                                 description=description,
                                 file_path=file_path,
                                 line_number=line_num,
-                                matched_content=(match.group(0)[:100]),
+                                matched_content=_raw_span(
+                                    raw_line,
+                                    line_offsets,
+                                    match.start(),
+                                    match.end(),
+                                )[:100],
                                 recommendation=(
                                     self._get_recommendation(
                                         category,
@@ -1383,7 +1546,7 @@ class SkillScanner:
                             )
                             for match in re.finditer(
                                 pattern,
-                                line,
+                                folded_line,
                                 re.IGNORECASE,
                             )
                         ]
@@ -1395,6 +1558,9 @@ class SkillScanner:
         )
         findings.extend(
             self._check_homoglyphs(content, file_path),
+        )
+        findings.extend(
+            self._check_idn_homographs(content, file_path),
         )
 
         return findings
@@ -1504,39 +1670,49 @@ class SkillScanner:
     ) -> list[Finding]:
         """Flag Unicode homoglyph / confusable obfuscation.
 
-        Reports runs of letters that contain non-Latin look-alike
-        characters which fold to an ASCII word (e.g. Cyrillic "es"
-        plus "url" -> "curl"). Both mixed-script words and wholly
-        non-Latin words that spell a sensitive command are treated
-        as evasion attempts.
+        Two map-independent signals:
+
+        * a token mixes Latin letters with letters from a look-alike
+          script (Cyrillic, Greek, ...) -- the classic homograph form,
+          caught even for confusables absent from CONFUSABLE_CHARS; and
+        * a wholly non-Latin token folds exactly to a sensitive command
+          keyword (a non-Latin "word" spelling ``curl`` is never benign).
         """
         findings: list[Finding] = []
-        seen: set[str] = set()
+        seen: set[tuple[str, str]] = set()
         for match in re.finditer(r"[^\W\d_]{2,}", content):
             word = match.group(0)
             if word.isascii():
                 continue
+            scripts = {
+                s for s in (_script_of(c) for c in word) if s is not None
+            }
+            mixed_script = "LATIN" in scripts and bool(
+                scripts & _LOOKALIKE_SCRIPTS
+            )
             normalized = normalize_confusables(word)
-            if not (normalized.isascii() and normalized.isalpha()):
+            folds_to_keyword = (
+                normalized.isascii()
+                and normalized.lower() in HOMOGLYPH_KEYWORDS
+            )
+            if not (mixed_script or folds_to_keyword):
                 continue
-            has_ascii_letter = any(c.isascii() and c.isalpha() for c in word)
-            is_keyword = normalized.lower() in HOMOGLYPH_KEYWORDS
-            if not (has_ascii_letter or is_keyword):
-                continue
-            key = normalized.lower()
+            key = (word, normalized)
             if key in seen:
                 continue
             seen.add(key)
             findings.append(
                 Finding(
                     severity=(
-                        Severity.CRITICAL if is_keyword else Severity.HIGH
+                        Severity.CRITICAL
+                        if folds_to_keyword
+                        else Severity.HIGH
                     ),
                     category="obfuscation",
                     description=(
-                        "Unicode homoglyph obfuscation: text "
-                        f"resembling '{normalized}' is built from "
-                        "non-Latin look-alike characters"
+                        "Unicode homoglyph obfuscation: "
+                        f"{word!r} mixes scripts / resembles "
+                        f"{normalized!r}"
                     ),
                     file_path=file_path,
                     matched_content=f"{word!r} -> {normalized!r}",
@@ -1545,6 +1721,55 @@ class SkillScanner:
                         "(e.g. Cyrillic/Greek) are disguised as ASCII "
                         "to evade detection. Treat as highly suspicious "
                         "and review the de-obfuscated text."
+                    ),
+                )
+            )
+        return findings
+
+    def _check_idn_homographs(
+        self,
+        content: str,
+        file_path: str,
+    ) -> list[Finding]:
+        """Flag punycode (IDN) labels that decode to homograph domains.
+
+        ``xn--`` labels are decoded; a decoded label containing a
+        look-alike-script character is an internationalized domain
+        impersonating an ASCII one.
+        """
+        findings: list[Finding] = []
+        seen: set[str] = set()
+        for match in re.finditer(r"xn--[a-z0-9-]+", content, re.IGNORECASE):
+            label = match.group(0)
+            if label in seen:
+                continue
+            seen.add(label)
+            try:
+                decoded = label[4:].encode("ascii").decode("punycode")
+            except (UnicodeError, ValueError):
+                continue
+            if decoded.isascii():
+                continue
+            folded = normalize_confusables(decoded)
+            scripts = {
+                s for s in (_script_of(c) for c in decoded) if s is not None
+            }
+            if not (scripts & _LOOKALIKE_SCRIPTS or folded != decoded):
+                continue
+            findings.append(
+                Finding(
+                    severity=Severity.HIGH,
+                    category="suspicious_url",
+                    description=(
+                        "Punycode/IDN homograph domain: "
+                        f"{label!r} decodes to {decoded!r}"
+                    ),
+                    file_path=file_path,
+                    matched_content=f"{label} -> {decoded} (~{folded})",
+                    recommendation=(
+                        "Internationalized domain names can impersonate "
+                        "ASCII domains. Verify the real registrable "
+                        "domain before trusting this URL."
                     ),
                 )
             )
@@ -1684,8 +1909,9 @@ class SkillScanner:
 
         for block in ast.get("code_blocks", []):
             lang = (block.get("language") or "").lower()
-            # Normalize so homograph/confusable bypasses are matched.
-            content = normalize_confusables(block.get("content", ""))
+            # Fold for matching; report the raw (un-folded) source.
+            raw_content = block.get("content", "")
+            content = normalize_confusables(raw_content)
 
             # Flag unmarked code blocks with
             # shell-like content
@@ -1703,7 +1929,7 @@ class SkillScanner:
                             "Unmarked code block with shell commands"
                         ),
                         file_path=file_path,
-                        matched_content=content[:80],
+                        matched_content=raw_content[:80],
                         recommendation=(
                             "Explicitly mark code block "
                             "language for transparency"
@@ -1750,7 +1976,7 @@ class SkillScanner:
                                 " code block)"
                             ),
                             file_path=file_path,
-                            matched_content=content[:80],
+                            matched_content=raw_content[:80],
                             recommendation=(
                                 self._get_recommendation(
                                     category,
@@ -1783,7 +2009,7 @@ class SkillScanner:
                             "Hidden executable instruction in HTML comment"
                         ),
                         file_path=file_path,
-                        matched_content=normalized[:80],
+                        matched_content=comment[:80],
                         recommendation=(
                             "Hidden instructions are a "
                             "strong indicator of "
