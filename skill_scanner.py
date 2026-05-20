@@ -730,6 +730,27 @@ class SkillScanner:
             Severity.CRITICAL,
             "Piped curl to Node execution",
         ),
+        # PowerShell download-and-execute (Windows attack vectors)
+        (
+            r"(?:iex|invoke-expression)\b[^|\n]*?"
+            r"(?:iwr|invoke-webrequest|invoke-restmethod"
+            r"|\birm\b|downloadstring"
+            r"|new-object\s+net\.webclient)",
+            Severity.CRITICAL,
+            "PowerShell download-and-execute "
+            "(Invoke-Expression of remote content)",
+        ),
+        (
+            r"(?:iwr|invoke-webrequest|invoke-restmethod|\birm\b)"
+            r"\b[^\n]*\|\s*(?:iex|invoke-expression)\b",
+            Severity.CRITICAL,
+            "PowerShell piped download to Invoke-Expression",
+        ),
+        (
+            r"\.downloadstring\s*\(",
+            Severity.HIGH,
+            "PowerShell DownloadString (remote code fetch)",
+        ),
         # macOS quarantine bypass - malware evasion
         (
             r"xattr\s+-[dr].*com\.apple\.quarantine",
@@ -840,6 +861,42 @@ class SkillScanner:
             Severity.CRITICAL,
             "OpenClaw credentials access",
         ),
+        # Cloud credential stores
+        (
+            r"\.config/gcloud",
+            Severity.CRITICAL,
+            "GCP credentials access",
+        ),
+        (
+            r"application_default_credentials\.json",
+            Severity.CRITICAL,
+            "GCP application default credentials access",
+        ),
+        (
+            r"~?/?\.azure/",
+            Severity.CRITICAL,
+            "Azure credentials access",
+        ),
+        (
+            r"~?/?\.kube/config",
+            Severity.CRITICAL,
+            "Kubernetes config access",
+        ),
+        (
+            r"/var/run/secrets/kubernetes\.io",
+            Severity.CRITICAL,
+            "Kubernetes service account token access",
+        ),
+        (
+            r"~?/?\.docker/config\.json",
+            Severity.HIGH,
+            "Docker credentials access",
+        ),
+        (
+            r"~/\.op/|\.config/op/",
+            Severity.CRITICAL,
+            "1Password CLI credentials access",
+        ),
         (
             r"SOUL\.md|MEMORY\.md",
             Severity.HIGH,
@@ -897,6 +954,12 @@ class SkillScanner:
             r"curl\s+.*POST\s+.*-d",
             Severity.MEDIUM,
             "POST request with data",
+        ),
+        (
+            r"(?:iwr|invoke-webrequest|invoke-restmethod|\birm\b)"
+            r"\b[^\n]*-method\s+post[^\n]*-body",
+            Severity.MEDIUM,
+            "PowerShell POST request with body (potential exfiltration)",
         ),
         (
             r"nc\s+\d+\.\d+\.\d+\.\d+",
@@ -1017,6 +1080,22 @@ class SkillScanner:
             r'Function\s*\([\'"]',
             Severity.HIGH,
             "Dynamic Function constructor",
+        ),
+        # PowerShell dynamic execution / encoding
+        (
+            r"(?<![\w-])(?:iex|invoke-expression)(?![\w-])",
+            Severity.HIGH,
+            "PowerShell Invoke-Expression (dynamic execution)",
+        ),
+        (
+            r"-e(?:nc|ncodedcommand)\b",
+            Severity.CRITICAL,
+            "PowerShell encoded command (-EncodedCommand)",
+        ),
+        (
+            r"frombase64string",
+            Severity.HIGH,
+            "PowerShell base64 decode (FromBase64String)",
         ),
         # Hex/octal encoded strings
         (
