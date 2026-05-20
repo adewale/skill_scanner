@@ -12,6 +12,17 @@ Scans AI agent skill directories for malware and security antipatterns before th
 
 For `.md` files, `parse_skill_ast()` uses **markdown-it-py** to extract structured data: YAML frontmatter (via `yaml.safe_load`), fenced code blocks with their language tags, headings, links, and HTML comments. Non-markdown files are scanned line-by-line.
 
+## Unicode Normalization (Homograph Defense)
+
+Detection regexes are ASCII, so before matching, every chunk of text is folded by `normalize_confusables()` / `_fold_text()` to defeat look-alike bypasses:
+
+1. **Invisible characters** -- zero-width spaces, joiners, and bidi controls are dropped (so `cu<ZWSP>rl` cannot hide a keyword).
+2. **NFKC** -- folds full-width, mathematical, and ligature variants (e.g. full-width digits in an IP).
+3. **Single-character confusables** -- a curated cross-script map folds homoglyphs NFKC leaves alone (Cyrillic `es` U+0441 -> Latin `c`).
+4. **Multi-character confusables** -- short sequences like `rn` -> `m` (so `chrnod` is matched as `chmod`).
+
+Matches are mapped back to the original bytes so findings still show the raw, obfuscated text. Two map-independent detectors add defense in depth: `_check_homoglyphs()` flags any token that mixes Latin with a look-alike script (Cyrillic/Greek/Armenian/...) even for confusables not in the map, and `_check_idn_homographs()` decodes `xn--` punycode labels to catch IDN homograph domains.
+
 ## Detection Engine
 
 The core is **272+ regex patterns across 8 categories**: dangerous shell commands, data exfiltration, suspicious URLs, obfuscation, social engineering, prompt injection, memory poisoning, and supply chain risks. Each pattern has a severity (CRITICAL through INFO).
@@ -22,7 +33,7 @@ Three layers reduce false positives:
 2. **Severity adjustment** -- `_adjust_severity_for_context()` downgrades findings in documentation languages (TypeScript, Python examples) and upgrades findings in executable languages (bash, sh).
 3. **AST-aware scanning** -- Code blocks, prose, and hidden content (HTML comments) are scanned separately with category-appropriate patterns. Prose only gets checked for prompt injection, memory poisoning, and social engineering.
 
-A special heuristic (`_check_base64_blobs()`) decodes any base64 string over 100 chars and checks if it contains shell keywords.
+A special heuristic (`_check_base64_blobs()`) decodes any base64 string over 100 chars and checks if it contains shell keywords (the decoded text is also confusable-folded first).
 
 ## Provenance and Trust
 
@@ -49,6 +60,8 @@ main() -> get_default_skill_paths() -> scan_skill() for each
                                              -> scan_hidden_content()
                                              -> scan prose
                                              -> check base64 blobs
+                                             -> check homoglyphs
+                                             -> check IDN homographs
     scan_file() for all other files
   -> ScanResult with findings list
 -> print or JSON output
