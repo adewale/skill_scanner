@@ -14,7 +14,7 @@ Based on security research from the ClawHavoc campaign.
 Usage:
     uv run skill_scanner.py
     uv run skill_scanner.py /path/to/skills
-    uv run skill_scanner.py --url https://github.com/user/repo/blob/main/SKILL.md
+    uv run skill_scanner.py --url https://github.com/user/repo/tree/main/skills/my-skill
     uv run skill_scanner.py --json
     uv run skill_scanner.py --fail-on-high
 
@@ -49,73 +49,35 @@ from markdown_it import MarkdownIt
 URL_FETCH_TIMEOUT = 30
 
 
-def _github_to_raw_url(url: str) -> str:
-    """Convert a GitHub blob/tree URL to raw content.
-
-    Handles URLs like:
-      https://github.com/user/repo/blob/branch/path
-    Converts to:
-      https://raw.githubusercontent.com/user/repo/branch/path
-
-    Also handles tree URLs (directories):
-      https://github.com/user/repo/tree/branch/dir
-    Converts to:
-      https://raw.githubusercontent.com/user/repo/branch/dir/SKILL.md
-
-    """
-    parsed = urllib.parse.urlparse(url)
-
-    # Strip query params (e.g., ?plain=1)
-    path = parsed.path
-
-    # Match /user/repo/blob/branch/...path...
-    match = re.match(
-        r"^/([^/]+)/([^/]+)/blob/(.+)$",
-        path,
-    )
-    if match:
-        user = match.group(1)
-        repo = match.group(2)
-        rest = match.group(3)
-        return f"https://raw.githubusercontent.com/{user}/{repo}/{rest}"
-
-    # Match /user/repo/tree/branch/...dir... (skill directory)
-    match = re.match(
-        r"^/([^/]+)/([^/]+)/tree/(.+)$",
-        path,
-    )
-    if match:
-        user = match.group(1)
-        repo = match.group(2)
-        rest = match.group(3)
-        return (
-            f"https://raw.githubusercontent.com"
-            f"/{user}/{repo}/{rest}/SKILL.md"
-        )
-
-    return url
-
-
 def fetch_url(url: str) -> tuple[str, str]:
-    """Fetch content from a URL.
+    """Fetch text content from a URL.
+
+    Sends GITHUB_TOKEN / GH_TOKEN as a Bearer token for
+    api.github.com requests when available.
 
     Returns:
         Tuple of (content, effective_url) where
-        effective_url is the final URL after redirects
-        and GitHub raw conversion.
+        effective_url is the final URL after redirects.
 
     Raises:
         urllib.error.URLError: On network errors.
         ValueError: On invalid URLs.
 
     """
-    # Convert GitHub blob/tree URLs to raw
-    if "github.com" in url and ("/blob/" in url or "/tree/" in url):
-        url = _github_to_raw_url(url)
+    headers: dict[str, str] = {
+        "User-Agent": "SkillScanner/1.0",
+    }
+    if "api.github.com" in url:
+        headers["Accept"] = "application/vnd.github.v3+json"
+        token = os.environ.get(
+            "GITHUB_TOKEN",
+        ) or os.environ.get("GH_TOKEN")
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
 
     req = urllib.request.Request(  # noqa: S310
         url,
-        headers={"User-Agent": "SkillScanner/1.0"},
+        headers=headers,
     )
     with urllib.request.urlopen(  # noqa: S310
         req,
@@ -434,6 +396,71 @@ def _raw_span(
     lo = offsets[start]
     hi = offsets[min(end, len(offsets)) - 1]
     return original[lo : hi + 1]
+
+
+def fetch_skill_directory(
+    url: str,
+) -> list[dict]:
+    """List all files in a remote skill directory.
+
+    Accepts a URL pointing to the top-level directory of a
+    skill. Uses the GitHub Contents API for github.com URLs.
+    Returns a list of file entries, each with keys:
+
+        name:         Filename (e.g. "SKILL.md", "a")
+        download_url: Raw URL for fetching content (None for symlinks)
+        file_type:    "file" or "symlink"
+        target:       Symlink target path (only for symlinks)
+
+    Raises:
+        ValueError: If the URL format is not supported.
+        urllib.error.URLError: On network errors.
+
+    """
+    parsed = urllib.parse.urlparse(url)
+    path = parsed.path.rstrip("/")
+
+    # Parse github.com /tree/ or /blob/ URLs
+    match = re.match(
+        r"^/([^/]+)/([^/]+)/(tree|blob)/([^/]+)/(.+)$",
+        path,
+    )
+    if parsed.hostname != "github.com" or not match:
+        msg = (
+            "Only github.com /tree/<ref>/<path> URLs "
+            "are currently supported for --url"
+        )
+        raise ValueError(msg)
+
+    owner = match.group(1)
+    repo = match.group(2)
+    ref = match.group(4)
+    dir_path = match.group(5)
+
+    api_url = (
+        f"https://api.github.com/repos/{owner}/{repo}"
+        f"/contents/{dir_path}?ref={ref}"
+    )
+
+    body, _ = fetch_url(api_url)
+    entries = json.loads(body)
+
+    if isinstance(entries, dict):
+        entries = [entries]
+
+    results = []
+    for entry in entries:
+        file_type = entry.get("type", "file")
+        item: dict = {
+            "name": entry["name"],
+            "download_url": entry.get("download_url"),
+            "file_type": file_type,
+        }
+        if file_type == "symlink":
+            item["target"] = entry.get("target", "")
+        results.append(item)
+
+    return results
 
 
 class Severity(Enum):
@@ -2477,23 +2504,21 @@ class SkillScanner:
             yield self.scan_skill(skill_dir)
 
     def scan_url(self, url: str) -> ScanResult:
-        """Fetch a URL and scan its content.
+        """Scan all files in a remote skill directory.
 
-        Supports GitHub blob URLs (auto-converted to raw),
-        raw file URLs, and any URL serving text content.
-
-        The content is scanned in-memory. If the URL
-        points to a SKILL.md inside a directory structure,
-        only the single file is scanned (not siblings).
+        Accepts a URL pointing to the top-level directory
+        of a skill.  Lists every file in the directory,
+        fetches each one, and scans its content.  Symlinks
+        are detected at the directory-listing level and
+        reported as findings.
 
         Args:
-            url: The URL to fetch and scan.
+            url: URL to the skill directory.
 
         Returns:
-            ScanResult with findings from the content.
+            ScanResult with findings from all files.
 
         """
-        # Derive a display name from the URL path
         parsed = urllib.parse.urlparse(url)
         url_path = parsed.path.rstrip("/")
         skill_name = url_path.split("/")[-1] or "remote-skill"
@@ -2535,33 +2560,81 @@ class SkillScanner:
                 )
             )
 
-        # Fetch the content
+        # List all files in the skill directory
         try:
-            content, effective_url = fetch_url(url)
+            entries = fetch_skill_directory(url)
         except Exception as exc:  # noqa: BLE001
             result.findings.append(
                 Finding(
                     severity=Severity.INFO,
                     category="fetch_error",
-                    description=(f"Could not fetch URL: {exc}"),
+                    description=(
+                        f"Could not list skill directory: {exc}"
+                    ),
                     file_path=url,
                     recommendation=(
-                        "Verify the URL is accessible and try again"
+                        "Verify the URL points to a "
+                        "skill directory and try again"
                     ),
                 )
             )
             return result
 
-        # Determine file type from URL path
-        file_path = effective_url.split("?")[0]
-        # Assume markdown for SKILL.md-style content
-        if not file_path.endswith(".md") and "skill" in file_path.lower():
-            file_path = file_path + ".md"
+        # Process each entry
+        for entry in entries:
+            name = entry["name"]
+            file_type = entry.get("file_type", "file")
 
-        # Scan the content
-        result.findings.extend(
-            self.scan_content(content, file_path),
-        )
+            # Symlinks are a finding regardless of target
+            if file_type == "symlink":
+                target = entry.get("target", "unknown")
+                severity = Severity.CRITICAL
+                desc = (
+                    f"Symlink in skill: {name} -> "
+                    f"{target}"
+                )
+                if re.match(
+                    r"(/etc/|~?/?\.ssh/|~?/?\.aws/"
+                    r"|~?/?\.gnupg/|/var/|/proc/"
+                    r"|/home/|/root/|/Users/)",
+                    target,
+                ):
+                    desc = (
+                        f"Symlink to sensitive path: "
+                        f"{name} -> {target}"
+                    )
+                elif target.startswith("/"):
+                    severity = Severity.HIGH
+
+                result.findings.append(
+                    Finding(
+                        severity=severity,
+                        category="exfiltration",
+                        description=desc,
+                        file_path=f"{url}/{name}",
+                        matched_content=f"{name} -> {target}",
+                        recommendation=(
+                            "Symlinks in skills can disguise "
+                            "access to sensitive system files. "
+                            "Verify the target is safe."
+                        ),
+                    )
+                )
+                continue
+
+            # Fetch and scan regular files
+            download_url = entry.get("download_url")
+            if not download_url:
+                continue
+
+            try:
+                content, _ = fetch_url(download_url)
+            except Exception:  # noqa: BLE001
+                continue
+
+            result.findings.extend(
+                self.scan_content(content, name),
+            )
 
         return result
 
@@ -2699,7 +2772,7 @@ Default locations scanned (if no path provided):
 Examples:
   %(prog)s
   %(prog)s /path/to/skills
-  %(prog)s --url https://github.com/user/repo/blob/main/skills/my-skill/SKILL.md
+  %(prog)s --url https://github.com/user/repo/tree/main/skills/my-skill
   %(prog)s --json
   %(prog)s --fail-on-high
         """,
@@ -2735,7 +2808,10 @@ Examples:
     )
     parser.add_argument(
         "--url",
-        help=("Fetch and scan a skill from a URL (supports GitHub blob URLs)"),
+        help=(
+            "URL to a skill directory (scans all files). "
+            "Supports github.com /tree/ URLs."
+        ),
     )
     parser.add_argument(
         "--list-paths",

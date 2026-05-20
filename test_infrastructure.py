@@ -251,71 +251,7 @@ class TestSkillMetadata:
 
 
 class TestScanResult:
-    """is_safe, critical_count, high_count properties."""
-
-    def test_empty_findings_is_safe(self):
-        r = ScanResult(skill_path="/p", skill_name="s")
-        assert r.is_safe is True
-
-    def test_info_only_is_safe(self):
-        r = ScanResult(
-            skill_path="/p",
-            skill_name="s",
-            findings=[
-                Finding(
-                    severity=Severity.INFO,
-                    category="test",
-                    description="d",
-                    file_path="f",
-                ),
-            ],
-        )
-        assert r.is_safe is True
-
-    def test_medium_only_is_safe(self):
-        r = ScanResult(
-            skill_path="/p",
-            skill_name="s",
-            findings=[
-                Finding(
-                    severity=Severity.MEDIUM,
-                    category="test",
-                    description="d",
-                    file_path="f",
-                ),
-            ],
-        )
-        assert r.is_safe is True
-
-    def test_high_not_safe(self):
-        r = ScanResult(
-            skill_path="/p",
-            skill_name="s",
-            findings=[
-                Finding(
-                    severity=Severity.HIGH,
-                    category="test",
-                    description="d",
-                    file_path="f",
-                ),
-            ],
-        )
-        assert r.is_safe is False
-
-    def test_critical_not_safe(self):
-        r = ScanResult(
-            skill_path="/p",
-            skill_name="s",
-            findings=[
-                Finding(
-                    severity=Severity.CRITICAL,
-                    category="test",
-                    description="d",
-                    file_path="f",
-                ),
-            ],
-        )
-        assert r.is_safe is False
+    """critical_count, high_count properties."""
 
     def test_critical_count(self):
         r = ScanResult(
@@ -847,7 +783,6 @@ class TestJSONOutput:
                 {
                     "skill_name": r.skill_name,
                     "skill_path": r.skill_path,
-                    "is_safe": r.is_safe,
                     "provenance": {
                         "source_url": (
                             r.provenance.source_url if r.provenance else None
