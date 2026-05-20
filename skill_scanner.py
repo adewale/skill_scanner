@@ -31,6 +31,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 import urllib.parse
 import urllib.request
 from collections.abc import Generator
@@ -106,6 +107,162 @@ def fetch_url(url: str) -> tuple[str, str]:
             errors="ignore",
         )
         return content, response.url
+
+
+# === UNICODE NORMALIZATION (HOMOGRAPH DEFENSE) ===
+# Detection regexes are written in ASCII, so an attacker can bypass
+# them with visually identical characters from other scripts -- e.g.
+# Cyrillic "es" (U+0441) instead of Latin "c" in "curl". Before
+# matching, text is normalized: NFKC folds full-width / mathematical /
+# ligature variants, then the confusable map below folds cross-script
+# homoglyphs that NFKC leaves untouched.
+#
+# Each key is the confusable character itself; the trailing comment
+# names its Unicode code point. The table only needs the cross-script
+# look-alikes NFKC does not already fold.
+CONFUSABLE_CHARS: dict[str, str] = {
+    # --- Cyrillic lowercase -> Latin ---
+    "а": "a",  # CYRILLIC SMALL LETTER A
+    "е": "e",  # CYRILLIC SMALL LETTER IE
+    "о": "o",  # CYRILLIC SMALL LETTER O
+    "р": "p",  # CYRILLIC SMALL LETTER ER
+    "с": "c",  # CYRILLIC SMALL LETTER ES
+    "у": "y",  # CYRILLIC SMALL LETTER U
+    "х": "x",  # CYRILLIC SMALL LETTER HA
+    "ѕ": "s",  # CYRILLIC SMALL LETTER DZE
+    "і": "i",  # CYRILLIC SMALL LETTER BYELORUSSIAN-UKRAINIAN I
+    "ј": "j",  # CYRILLIC SMALL LETTER JE
+    "к": "k",  # CYRILLIC SMALL LETTER KA
+    "м": "m",  # CYRILLIC SMALL LETTER EM
+    "т": "t",  # CYRILLIC SMALL LETTER TE
+    "һ": "h",  # CYRILLIC SMALL LETTER SHHA
+    "ԁ": "d",  # CYRILLIC SMALL LETTER KOMI DE
+    "ԛ": "q",  # CYRILLIC SMALL LETTER QA
+    "ԝ": "w",  # CYRILLIC SMALL LETTER WE
+    "ѵ": "v",  # CYRILLIC SMALL LETTER IZHITSA
+    # --- Cyrillic uppercase -> Latin ---
+    "А": "A",  # CYRILLIC CAPITAL LETTER A
+    "В": "B",  # CYRILLIC CAPITAL LETTER VE
+    "Е": "E",  # CYRILLIC CAPITAL LETTER IE
+    "Ѕ": "S",  # CYRILLIC CAPITAL LETTER DZE
+    "І": "I",  # CYRILLIC CAPITAL LETTER BYELORUSSIAN-UKRAINIAN I
+    "Ј": "J",  # CYRILLIC CAPITAL LETTER JE
+    "К": "K",  # CYRILLIC CAPITAL LETTER KA
+    "М": "M",  # CYRILLIC CAPITAL LETTER EM
+    "Н": "H",  # CYRILLIC CAPITAL LETTER EN
+    "О": "O",  # CYRILLIC CAPITAL LETTER O
+    "Р": "P",  # CYRILLIC CAPITAL LETTER ER
+    "С": "C",  # CYRILLIC CAPITAL LETTER ES
+    "Т": "T",  # CYRILLIC CAPITAL LETTER TE
+    "У": "Y",  # CYRILLIC CAPITAL LETTER U
+    "Х": "X",  # CYRILLIC CAPITAL LETTER HA
+    "Ԛ": "Q",  # CYRILLIC CAPITAL LETTER QA
+    "Ԝ": "W",  # CYRILLIC CAPITAL LETTER WE
+    "Ԁ": "D",  # CYRILLIC CAPITAL LETTER KOMI DE
+    "Ѵ": "V",  # CYRILLIC CAPITAL LETTER IZHITSA
+    # --- Greek lowercase -> Latin ---
+    "α": "a",  # GREEK SMALL LETTER ALPHA
+    "β": "b",  # GREEK SMALL LETTER BETA
+    "γ": "y",  # GREEK SMALL LETTER GAMMA
+    "ε": "e",  # GREEK SMALL LETTER EPSILON
+    "η": "n",  # GREEK SMALL LETTER ETA
+    "ι": "i",  # GREEK SMALL LETTER IOTA
+    "κ": "k",  # GREEK SMALL LETTER KAPPA
+    "ν": "v",  # GREEK SMALL LETTER NU
+    "ο": "o",  # GREEK SMALL LETTER OMICRON
+    "ρ": "p",  # GREEK SMALL LETTER RHO
+    "τ": "t",  # GREEK SMALL LETTER TAU
+    "υ": "u",  # GREEK SMALL LETTER UPSILON
+    "χ": "x",  # GREEK SMALL LETTER CHI
+    "ω": "w",  # GREEK SMALL LETTER OMEGA
+    "ϲ": "c",  # GREEK LUNATE SIGMA SYMBOL
+    # --- Greek uppercase -> Latin ---
+    "Α": "A",  # GREEK CAPITAL LETTER ALPHA
+    "Β": "B",  # GREEK CAPITAL LETTER BETA
+    "Ε": "E",  # GREEK CAPITAL LETTER EPSILON
+    "Ζ": "Z",  # GREEK CAPITAL LETTER ZETA
+    "Η": "H",  # GREEK CAPITAL LETTER ETA
+    "Ι": "I",  # GREEK CAPITAL LETTER IOTA
+    "Κ": "K",  # GREEK CAPITAL LETTER KAPPA
+    "Μ": "M",  # GREEK CAPITAL LETTER MU
+    "Ν": "N",  # GREEK CAPITAL LETTER NU
+    "Ο": "O",  # GREEK CAPITAL LETTER OMICRON
+    "Ρ": "P",  # GREEK CAPITAL LETTER RHO
+    "Τ": "T",  # GREEK CAPITAL LETTER TAU
+    "Υ": "Y",  # GREEK CAPITAL LETTER UPSILON
+    "Χ": "X",  # GREEK CAPITAL LETTER CHI
+    "Ϲ": "C",  # GREEK CAPITAL LUNATE SIGMA SYMBOL
+    # --- Other Latin look-alikes NFKC does not fold ---
+    "ı": "i",  # LATIN SMALL LETTER DOTLESS I
+    "ɡ": "g",  # LATIN SMALL LETTER SCRIPT G
+    # --- Command-syntax punctuation look-alikes ---
+    "∕": "/",  # DIVISION SLASH
+    "⁄": "/",  # FRACTION SLASH
+    "․": ".",  # ONE DOT LEADER
+    "。": ".",  # IDEOGRAPHIC FULL STOP
+    "∶": ":",  # RATIO
+    "꞉": ":",  # MODIFIER LETTER COLON
+    "‐": "-",  # HYPHEN
+    "‑": "-",  # NON-BREAKING HYPHEN
+    "‒": "-",  # FIGURE DASH
+    "–": "-",  # EN DASH
+    "—": "-",  # EM DASH
+    "―": "-",  # HORIZONTAL BAR
+    "−": "-",  # MINUS SIGN
+    "∣": "|",  # DIVIDES
+    "│": "|",  # BOX DRAWINGS LIGHT VERTICAL
+    "ǀ": "|",  # LATIN LETTER DENTAL CLICK
+}
+
+_CONFUSABLE_TRANSLATION = str.maketrans(CONFUSABLE_CHARS)
+
+# Sensitive tokens. A run of confusables that folds exactly to one of
+# these is flagged even when it is not mixed-script: a wholly non-Latin
+# "word" that spells a shell command is never legitimate.
+HOMOGLYPH_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "curl",
+        "wget",
+        "bash",
+        "sh",
+        "zsh",
+        "ssh",
+        "scp",
+        "nc",
+        "netcat",
+        "sudo",
+        "chmod",
+        "chown",
+        "eval",
+        "exec",
+        "python",
+        "node",
+        "npm",
+        "npx",
+        "pip",
+        "perl",
+        "ruby",
+        "telnet",
+        "env",
+        "base64",
+        "crontab",
+        "launchctl",
+        "systemctl",
+        "powershell",
+        "openssl",
+    }
+)
+
+
+def normalize_confusables(text: str) -> str:
+    """Fold Unicode look-alikes to ASCII for robust pattern matching.
+
+    Applies NFKC normalization followed by the confusable-character
+    map. The result is intended for detection only, not for display.
+    """
+    return unicodedata.normalize("NFKC", text).translate(
+        _CONFUSABLE_TRANSLATION,
+    )
 
 
 class Severity(Enum):
@@ -1144,6 +1301,7 @@ class SkillScanner:
                     block.get("content", ""),
                     "",
                 )
+            prose_content = normalize_confusables(prose_content)
 
             # Scan prose for prompt injection,
             # memory poisoning, social engineering,
@@ -1192,8 +1350,12 @@ class SkillScanner:
                     ]
                 )
         else:
-            # For non-markdown files, line-by-line scanning
-            lines = content.split("\n")
+            # For non-markdown files, line-by-line scanning.
+            # Normalize each line so homograph/confusable bypasses
+            # are matched while line numbers stay accurate.
+            lines = [
+                normalize_confusables(line) for line in content.split("\n")
+            ]
             for (
                 pattern,
                 severity,
@@ -1230,6 +1392,9 @@ class SkillScanner:
         # Additional heuristic checks
         findings.extend(
             self._check_base64_blobs(content, file_path),
+        )
+        findings.extend(
+            self._check_homoglyphs(content, file_path),
         )
 
         return findings
@@ -1295,9 +1460,11 @@ class SkillScanner:
         for match in re.finditer(blob_pattern, content):
             blob = match.group(0)
             try:
-                decoded = base64.b64decode(blob).decode(
-                    "utf-8",
-                    errors="ignore",
+                decoded = normalize_confusables(
+                    base64.b64decode(blob).decode(
+                        "utf-8",
+                        errors="ignore",
+                    )
                 )
                 suspicious_keywords = [
                     "bash",
@@ -1328,6 +1495,59 @@ class SkillScanner:
                     )
             except (ValueError, UnicodeDecodeError):
                 pass  # Not valid base64, ignore
+        return findings
+
+    def _check_homoglyphs(
+        self,
+        content: str,
+        file_path: str,
+    ) -> list[Finding]:
+        """Flag Unicode homoglyph / confusable obfuscation.
+
+        Reports runs of letters that contain non-Latin look-alike
+        characters which fold to an ASCII word (e.g. Cyrillic "es"
+        plus "url" -> "curl"). Both mixed-script words and wholly
+        non-Latin words that spell a sensitive command are treated
+        as evasion attempts.
+        """
+        findings: list[Finding] = []
+        seen: set[str] = set()
+        for match in re.finditer(r"[^\W\d_]{2,}", content):
+            word = match.group(0)
+            if word.isascii():
+                continue
+            normalized = normalize_confusables(word)
+            if not (normalized.isascii() and normalized.isalpha()):
+                continue
+            has_ascii_letter = any(c.isascii() and c.isalpha() for c in word)
+            is_keyword = normalized.lower() in HOMOGLYPH_KEYWORDS
+            if not (has_ascii_letter or is_keyword):
+                continue
+            key = normalized.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            findings.append(
+                Finding(
+                    severity=(
+                        Severity.CRITICAL if is_keyword else Severity.HIGH
+                    ),
+                    category="obfuscation",
+                    description=(
+                        "Unicode homoglyph obfuscation: text "
+                        f"resembling '{normalized}' is built from "
+                        "non-Latin look-alike characters"
+                    ),
+                    file_path=file_path,
+                    matched_content=f"{word!r} -> {normalized!r}",
+                    recommendation=(
+                        "Look-alike characters from other scripts "
+                        "(e.g. Cyrillic/Greek) are disguised as ASCII "
+                        "to evade detection. Treat as highly suspicious "
+                        "and review the de-obfuscated text."
+                    ),
+                )
+            )
         return findings
 
     def _get_recommendation(self, category: str) -> str:
@@ -1464,7 +1684,8 @@ class SkillScanner:
 
         for block in ast.get("code_blocks", []):
             lang = (block.get("language") or "").lower()
-            content = block.get("content", "")
+            # Normalize so homograph/confusable bypasses are matched.
+            content = normalize_confusables(block.get("content", ""))
 
             # Flag unmarked code blocks with
             # shell-like content
@@ -1546,30 +1767,31 @@ class SkillScanner:
         file_path: str,
     ) -> list[Finding]:
         """Scan for hidden malicious content."""
-        return [
-            Finding(
-                severity=Severity.CRITICAL,
-                category="prompt_injection",
-                description=("Hidden executable instruction in HTML comment"),
-                file_path=file_path,
-                matched_content=comment[:80],
-                recommendation=(
-                    "Hidden instructions are a "
-                    "strong indicator of "
-                    "malicious intent"
-                ),
-            )
-            for comment in ast.get(
-                "html_comments",
-                [],
-            )
+        findings = []
+        for comment in ast.get("html_comments", []):
+            normalized = normalize_confusables(comment)
             if re.search(
-                r"(curl|wget|bash|eval|exec"
-                r"|nc\s)",
-                comment,
+                r"(curl|wget|bash|eval|exec|nc\s)",
+                normalized,
                 re.IGNORECASE,
-            )
-        ]
+            ):
+                findings.append(
+                    Finding(
+                        severity=Severity.CRITICAL,
+                        category="prompt_injection",
+                        description=(
+                            "Hidden executable instruction in HTML comment"
+                        ),
+                        file_path=file_path,
+                        matched_content=normalized[:80],
+                        recommendation=(
+                            "Hidden instructions are a "
+                            "strong indicator of "
+                            "malicious intent"
+                        ),
+                    )
+                )
+        return findings
 
     def scan_file(self, file_path: Path) -> list[Finding]:
         """Scan a single file."""

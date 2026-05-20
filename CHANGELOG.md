@@ -8,7 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- **Test suite** with 175 tests across three tiers:
+- **Unicode homograph defense** (issue #6): scanned text is normalized
+  (NFKC plus a Cyrillic/Greek/punctuation confusable map) before pattern
+  matching, so visually identical look-alike characters (e.g. Cyrillic
+  "es" U+0441 substituted for Latin "c" in `curl`) can no longer bypass
+  the detection regexes. A dedicated `obfuscation` finding is also raised
+  when confusable characters are detected, covering both mixed-script
+  words and wholly non-Latin words that spell a sensitive command.
+- **Test suite** with 186 tests across three tiers:
   - Tier 1 (`test_infrastructure.py`): Unit tests for dataclasses, trust/risk scoring, AST parsing, whitelists, severity adjustment, provenance/structure analysis
   - Tier 2 (`test_scanning.py`): Detection tests for all 8 pattern categories (positive + false-positive), integration tests via pyfakefs
   - Tier 3 (`test_documentation.py`): Cross-references docs against code to catch documentation drift
