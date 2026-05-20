@@ -417,6 +417,41 @@ def _raw_span(
     return original[lo : hi + 1]
 
 
+def _dual_matches(
+    pattern: str,
+    raw: str,
+    folded: str,
+    offsets: list[int] | None,
+) -> list[str]:
+    """Return raw matched substrings for ``pattern`` in folded or raw text.
+
+    Folded matches catch homoglyph/confusable bypasses; raw matches catch
+    keywords the confusable fold would corrupt (e.g. ``cl``->``d`` turning
+    ``gcloud`` into ``gdoud``). Results are de-duplicated by their span in
+    the raw text so plain ASCII (where folded == raw) is not double-counted.
+    """
+    seen: set[tuple[int, int]] = set()
+    results: list[str] = []
+    for m in re.finditer(pattern, folded, re.IGNORECASE):
+        if offsets is None:
+            lo, hi = m.start(), m.end()
+        elif m.start() >= len(offsets):
+            continue
+        else:
+            lo = offsets[m.start()]
+            hi = offsets[min(m.end(), len(offsets)) - 1] + 1
+        if (lo, hi) not in seen:
+            seen.add((lo, hi))
+            results.append(raw[lo:hi])
+    if offsets is not None:
+        for m in re.finditer(pattern, raw, re.IGNORECASE):
+            key = (m.start(), m.end())
+            if key not in seen:
+                seen.add(key)
+                results.append(m.group(0))
+    return results
+
+
 class Severity(Enum):
     """Severity levels for scan findings."""
 
@@ -1574,22 +1609,18 @@ class SkillScanner:
                             category=category,
                             description=(f"{description} (in prose)"),
                             file_path=file_path,
-                            matched_content=_raw_span(
-                                raw_prose,
-                                prose_offsets,
-                                match.start(),
-                                match.end(),
-                            )[:80],
+                            matched_content=matched[:80],
                             recommendation=(
                                 self._get_recommendation(
                                     category,
                                 )
                             ),
                         )
-                        for match in re.finditer(
+                        for matched in _dual_matches(
                             pattern,
+                            raw_prose,
                             prose_content,
-                            re.IGNORECASE,
+                            prose_offsets,
                         )
                     ]
                 )
@@ -1619,22 +1650,18 @@ class SkillScanner:
                                 description=description,
                                 file_path=file_path,
                                 line_number=line_num,
-                                matched_content=_raw_span(
-                                    raw_line,
-                                    line_offsets,
-                                    match.start(),
-                                    match.end(),
-                                )[:100],
+                                matched_content=matched[:100],
                                 recommendation=(
                                     self._get_recommendation(
                                         category,
                                     )
                                 ),
                             )
-                            for match in re.finditer(
+                            for matched in _dual_matches(
                                 pattern,
+                                raw_line,
                                 folded_line,
-                                re.IGNORECASE,
+                                line_offsets,
                             )
                         ]
                     )
@@ -1713,12 +1740,11 @@ class SkillScanner:
         for match in re.finditer(blob_pattern, content):
             blob = match.group(0)
             try:
-                decoded = normalize_confusables(
-                    base64.b64decode(blob).decode(
-                        "utf-8",
-                        errors="ignore",
-                    )
+                raw_decoded = base64.b64decode(blob).decode(
+                    "utf-8",
+                    errors="ignore",
                 )
+                decoded = normalize_confusables(raw_decoded)
                 suspicious_keywords = [
                     "bash",
                     "curl",
@@ -1726,7 +1752,10 @@ class SkillScanner:
                     "eval",
                     "exec",
                 ]
-                if any(kw in decoded.lower() for kw in suspicious_keywords):
+                if any(
+                    kw in decoded.lower() or kw in raw_decoded.lower()
+                    for kw in suspicious_keywords
+                ):
                     findings.append(
                         Finding(
                             severity=Severity.CRITICAL,
@@ -2002,17 +2031,18 @@ class SkillScanner:
 
         for block in ast.get("code_blocks", []):
             lang = (block.get("language") or "").lower()
-            # Fold for matching; report the raw (un-folded) source.
+            # Match against both the raw source and the confusable-folded
+            # form: folded catches homoglyph bypasses, raw catches
+            # keywords the fold would corrupt (e.g. cl->d in "gcloud").
             raw_content = block.get("content", "")
             content = normalize_confusables(raw_content)
 
             # Flag unmarked code blocks with
             # shell-like content
-            if not lang and re.search(
-                r"^\s*(curl|wget|npm|pip"
-                r"|sudo|chmod|eval)\s",
-                content,
-                re.MULTILINE,
+            unmarked_re = r"^\s*(curl|wget|npm|pip|sudo|chmod|eval)\s"
+            if not lang and (
+                re.search(unmarked_re, content, re.MULTILINE)
+                or re.search(unmarked_re, raw_content, re.MULTILINE)
             ):
                 findings.append(
                     Finding(
@@ -2040,6 +2070,10 @@ class SkillScanner:
                 if re.search(
                     pattern,
                     content,
+                    re.IGNORECASE | re.MULTILINE,
+                ) or re.search(
+                    pattern,
+                    raw_content,
                     re.IGNORECASE | re.MULTILINE,
                 ):
                     # Check whitelist
@@ -2101,13 +2135,17 @@ class SkillScanner:
         )
         findings = []
         for span in ast.get("code_spans", []):
+            folded_span = normalize_confusables(span)
             for (
                 pattern,
                 severity,
                 description,
                 category,
             ) in code_span_patterns:
-                if not re.search(pattern, span, re.IGNORECASE):
+                if not (
+                    re.search(pattern, span, re.IGNORECASE)
+                    or re.search(pattern, folded_span, re.IGNORECASE)
+                ):
                     continue
                 if self._should_skip_finding(
                     pattern,

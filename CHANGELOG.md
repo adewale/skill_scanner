@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   flags any token mixing Latin with a look-alike script (plus non-Latin
   words that spell a sensitive command), and `_check_idn_homographs`
   decodes `xn--` punycode labels to catch IDN homograph domains.
-- **Test suite** with 175 tests across three tiers:
+- **Test suite** with 234 tests across three tiers:
   - Tier 1 (`test_infrastructure.py`): Unit tests for dataclasses, trust/risk scoring, AST parsing, whitelists, severity adjustment, provenance/structure analysis
   - Tier 2 (`test_scanning.py`): Detection tests for all 8 pattern categories (positive + false-positive), integration tests via pyfakefs
   - Tier 3 (`test_documentation.py`): Cross-references docs against code to catch documentation drift
@@ -50,6 +50,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Pattern matching now runs against **both the raw and the confusable-folded** text. The Unicode fold (issue #6) rewrites legitimate ASCII keywords containing `cl`/`rn`/`vv` (e.g. `gcloud`->`gdoud`, `kubernetes`->`kubemetes`, `.clawdbot`->`.dawdbot`, `Net.WebClient`->`Net.WebDient`), which had silently prevented those literal patterns from matching; matching raw text as well restores them while keeping the homoglyph defense (matching the folded form). Plain ASCII is de-duplicated so findings are not double-counted.
 - `pwsh` code fences are now recognized as an executable language (alongside `powershell`/`ps1`), so PowerShell findings in ```pwsh blocks receive the executable severity boost.
 - Corrected the stale "272+ patterns" claim in `HOW_IT_WORKS.md` to the accurate compiled-pattern count (116), and made the documentation-drift test assert the exact count instead of a hard-coded string.
 - False positive where Elixir's `iex` REPL (e.g. `iex -S mix`) was flagged as PowerShell `Invoke-Expression`; the `iex` alias now requires an execution argument (`(`, `$`, quote, `@`) or a pipe into it.
