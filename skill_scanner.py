@@ -748,8 +748,8 @@ class SkillScanner:
         ),
         (
             r"\.downloadstring\s*\(",
-            Severity.HIGH,
-            "PowerShell DownloadString (remote code fetch)",
+            Severity.MEDIUM,
+            "PowerShell DownloadString (remote content fetch)",
         ),
         # macOS quarantine bypass - malware evasion
         (
@@ -861,9 +861,9 @@ class SkillScanner:
             Severity.CRITICAL,
             "OpenClaw credentials access",
         ),
-        # Cloud credential stores
+        # Cloud credential stores (POSIX and Windows path forms)
         (
-            r"\.config/gcloud",
+            r"(?:\.config|appdata%?)[\\/]gcloud\b",
             Severity.CRITICAL,
             "GCP credentials access",
         ),
@@ -873,12 +873,12 @@ class SkillScanner:
             "GCP application default credentials access",
         ),
         (
-            r"~?/?\.azure/",
+            r"~?[\\/]?\.azure[\\/]",
             Severity.CRITICAL,
             "Azure credentials access",
         ),
         (
-            r"~?/?\.kube/config",
+            r"~?[\\/]?\.kube[\\/]config",
             Severity.CRITICAL,
             "Kubernetes config access",
         ),
@@ -888,12 +888,12 @@ class SkillScanner:
             "Kubernetes service account token access",
         ),
         (
-            r"~?/?\.docker/config\.json",
+            r"~?[\\/]?\.docker[\\/]config\.json",
             Severity.HIGH,
             "Docker credentials access",
         ),
         (
-            r"~/\.op/|\.config/op/",
+            r"~[\\/]\.op[\\/]|\.config[\\/]op[\\/]",
             Severity.CRITICAL,
             "1Password CLI credentials access",
         ),
@@ -1082,8 +1082,12 @@ class SkillScanner:
             "Dynamic Function constructor",
         ),
         # PowerShell dynamic execution / encoding
+        # iex alias requires an execution argument or a pipe into it
+        # so Elixir's `iex` REPL (e.g. `iex -S mix`) is not flagged.
         (
-            r"(?<![\w-])(?:iex|invoke-expression)(?![\w-])",
+            r"\binvoke-expression\b"
+            r"|(?<![\w-])iex\s*[(\"'$@]"
+            r"|\|\s*iex\b",
             Severity.HIGH,
             "PowerShell Invoke-Expression (dynamic execution)",
         ),
@@ -1094,7 +1098,7 @@ class SkillScanner:
         ),
         (
             r"frombase64string",
-            Severity.HIGH,
+            Severity.MEDIUM,
             "PowerShell base64 decode (FromBase64String)",
         ),
         # Hex/octal encoded strings

@@ -642,6 +642,55 @@ class TestPowerShellExecution:
             desc_contains="download-and-execute",
         )
 
+    def test_elixir_iex_repl_benign(self, scanner):
+        """Elixir's `iex` REPL must not be flagged as PowerShell
+        Invoke-Expression (it has no execution argument)."""
+        findings = _scan_md(
+            scanner,
+            code_blocks=[("bash", "iex -S mix phx.server")],
+        )
+        assert not _has_finding(
+            findings,
+            category="obfuscation",
+            desc_contains="Invoke-Expression",
+        )
+
+    def test_benign_base64_decode_not_high(self, scanner):
+        """FromBase64String is dual-use; benign decode is at most
+        MEDIUM, never HIGH/CRITICAL."""
+        findings = _scan_md(
+            scanner,
+            code_blocks=[("powershell", "[Convert]::FromBase64String($cfg)")],
+        )
+        high = [
+            f
+            for f in findings
+            if f.category == "obfuscation"
+            and f.severity in (Severity.CRITICAL, Severity.HIGH)
+        ]
+        assert high == []
+
+    def test_benign_downloadstring_not_critical(self, scanner):
+        """A bare DownloadString (no iex) fetching an API is not
+        escalated to CRITICAL."""
+        findings = _scan_md(
+            scanner,
+            code_blocks=[
+                (
+                    "powershell",
+                    "$json = (New-Object Net.WebClient)"
+                    ".DownloadString($apiUrl)",
+                )
+            ],
+        )
+        crit = [
+            f
+            for f in findings
+            if f.category == "dangerous_shell"
+            and f.severity == Severity.CRITICAL
+        ]
+        assert crit == []
+
 
 # ================================================================
 # Cloud credential stores (issue #7)
@@ -733,6 +782,57 @@ class TestCloudCredentials:
             code_blocks=[("bash", "op item get Login")],
         )
         assert not _has_finding(findings, category="exfiltration")
+
+
+# ================================================================
+# Cloud credential stores on Windows (issue #7 follow-up)
+# ================================================================
+
+
+class TestWindowsCloudCredentials:
+    """Backslash and %APPDATA%/%USERPROFILE% credential paths."""
+
+    def test_gcp_appdata_gcloud(self, scanner):
+        """GCP on Windows lives at %APPDATA%\\gcloud, not ~/.config."""
+        findings = _scan_md(
+            scanner,
+            code_blocks=[
+                ("powershell", "type $env:APPDATA\\gcloud\\credentials.db")
+            ],
+        )
+        assert _has_finding(findings, category="exfiltration")
+
+    def test_azure_backslash(self, scanner):
+        findings = _scan_md(
+            scanner,
+            code_blocks=[
+                ("powershell", "type %USERPROFILE%\\.azure\\credentials")
+            ],
+        )
+        assert _has_finding(findings, category="exfiltration")
+
+    def test_kube_backslash(self, scanner):
+        findings = _scan_md(
+            scanner,
+            code_blocks=[("powershell", "type $HOME\\.kube\\config")],
+        )
+        assert _has_finding(findings, category="exfiltration")
+
+    def test_docker_backslash(self, scanner):
+        findings = _scan_md(
+            scanner,
+            code_blocks=[
+                ("powershell", "Get-Content $HOME\\.docker\\config.json")
+            ],
+        )
+        assert _has_finding(findings, category="exfiltration")
+
+    def test_1password_backslash(self, scanner):
+        findings = _scan_md(
+            scanner,
+            code_blocks=[("powershell", "type ~\\.op\\config")],
+        )
+        assert _has_finding(findings, category="exfiltration")
 
 
 # ================================================================

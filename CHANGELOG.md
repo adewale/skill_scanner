@@ -9,8 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - **PowerShell / Windows attack patterns** (issue #7): download-and-execute cradles (`Invoke-Expression (iwr ...)`, `iwr ... | iex`, `WebClient.DownloadString`), dynamic execution (`Invoke-Expression`/`iex`), encoded commands (`-EncodedCommand`, `FromBase64String`), and POST exfiltration (`iwr ... -Method POST -Body`).
-- **Cloud credential path detection** (issue #7): GCP (`~/.config/gcloud/`, `application_default_credentials.json`), Azure (`~/.azure/`), Kubernetes (`~/.kube/config`, `/var/run/secrets/kubernetes.io/`), Docker (`~/.docker/config.json`), and 1Password CLI (`~/.config/op/`, `~/.op/`).
-- Tests covering the new Windows/PowerShell and cloud credential scenarios (positive detections plus false-positive guards for `iexplore`, `gcloud`/`op`/`docker` CLI invocations, and plain GET downloads).
+- **Cloud credential path detection** (issue #7): GCP (`~/.config/gcloud/`, Windows `%APPDATA%\gcloud\`, `application_default_credentials.json`), Azure (`~/.azure/`), Kubernetes (`~/.kube/config`, `/var/run/secrets/kubernetes.io/`), Docker (`~/.docker/config.json`), and 1Password CLI (`~/.config/op/`, `~/.op/`). All cloud-credential patterns match both POSIX (`/`) and Windows (`\`) path separators.
+- Tests covering the new Windows/PowerShell and cloud credential scenarios (positive detections plus false-positive guards for `iexplore`, Elixir's `iex` REPL, `gcloud`/`op`/`docker` CLI invocations, plain GET downloads, and benign base64/DownloadString usage).
 - **Unicode homograph defense** (issue #6): all scanned text is folded
   before pattern matching so look-alike bypasses are caught. The pipeline
   (`normalize_confusables` / `_fold_text`) strips invisible/zero-width and
@@ -49,6 +49,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- False positive where Elixir's `iex` REPL (e.g. `iex -S mix`) was flagged as PowerShell `Invoke-Expression`; the `iex` alias now requires an execution argument (`(`, `$`, quote, `@`) or a pipe into it.
+- Downgraded dual-use PowerShell `FromBase64String` (HIGH → MEDIUM) and standalone `WebClient.DownloadString` (HIGH → MEDIUM) to reduce noise on benign decode/fetch usage; the execute-the-download form (`iex (... DownloadString ...)`) remains CRITICAL.
 - False positives on Cloudflare Workers skills where `interface Env` triggered "Environment file access" alerts.
 - False positives on `localhost:8788` flagged as "URL with non-standard port".
 - `curl | bash` in a TypeScript example code block no longer reported at the same severity as in a bash code block.

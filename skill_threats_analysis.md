@@ -31,7 +31,7 @@ Based on research from:
 | Python reverse shell | CRITICAL | ✅ Yes | Regex pattern |
 | PowerShell download-and-execute (`Invoke-Expression (iwr ...)`) | CRITICAL | ✅ Yes | Regex pattern |
 | PowerShell piped download to `iex` (`iwr ... \| iex`) | CRITICAL | ✅ Yes | Regex pattern |
-| PowerShell `WebClient.DownloadString` cradle | HIGH | ✅ Yes | Regex pattern |
+| PowerShell `WebClient.DownloadString` cradle | MEDIUM | ✅ Yes | Regex pattern |
 | SUID bit manipulation (`chmod +s`) | CRITICAL | ✅ Yes | Regex pattern |
 | Privilege escalation (`sudo su`) | HIGH | ✅ Yes | Regex pattern |
 | Overly permissive chmod (`sudo chmod 777`) | HIGH | ✅ Yes | Regex pattern |
@@ -58,13 +58,13 @@ Based on research from:
 | Solana wallet/keypair theft | CRITICAL | ✅ Yes | Regex pattern |
 | Bitcoin wallet theft | CRITICAL | ✅ Yes | Regex pattern |
 | OpenClaw credentials (`.clawdbot/.env`, `.openclaw/.env`) | CRITICAL | ✅ Yes | Regex pattern |
-| GCP credentials (`~/.config/gcloud/`) | CRITICAL | ✅ Yes | Regex pattern |
+| GCP credentials (`~/.config/gcloud/`, Windows `%APPDATA%\gcloud\`) | CRITICAL | ✅ Yes | Regex pattern |
 | GCP application default credentials (`application_default_credentials.json`) | CRITICAL | ✅ Yes | Regex pattern |
-| Azure credentials (`~/.azure/`) | CRITICAL | ✅ Yes | Regex pattern |
-| Kubernetes config (`~/.kube/config`) | CRITICAL | ✅ Yes | Regex pattern |
+| Azure credentials (`~/.azure/`, incl. Windows backslash paths) | CRITICAL | ✅ Yes | Regex pattern |
+| Kubernetes config (`~/.kube/config`, incl. Windows backslash paths) | CRITICAL | ✅ Yes | Regex pattern |
 | Kubernetes service account token (`/var/run/secrets/kubernetes.io/`) | CRITICAL | ✅ Yes | Regex pattern |
-| Docker credentials (`~/.docker/config.json`) | HIGH | ✅ Yes | Regex pattern |
-| 1Password CLI store (`~/.config/op/`, `~/.op/`) | CRITICAL | ✅ Yes | Regex pattern |
+| Docker credentials (`~/.docker/config.json`, incl. Windows backslash paths) | HIGH | ✅ Yes | Regex pattern |
+| 1Password CLI store (`~/.config/op/`, `~/.op/`, incl. Windows backslash paths) | CRITICAL | ✅ Yes | Regex pattern |
 | Environment file access (`.env`) | HIGH | ✅ Yes | Regex pattern |
 | Agent memory file access (SOUL.md, MEMORY.md) | HIGH | ✅ Yes | Regex pattern |
 | Silent POST requests with data | MEDIUM | ✅ Yes | Regex pattern |
@@ -103,7 +103,7 @@ Based on research from:
 | Dynamic Function constructor | HIGH | ✅ Yes | Regex pattern |
 | PowerShell `Invoke-Expression`/`iex` dynamic execution | HIGH | ✅ Yes | Regex pattern |
 | PowerShell encoded command (`-EncodedCommand`) | CRITICAL | ✅ Yes | Regex pattern |
-| PowerShell base64 decode (`FromBase64String`) | HIGH | ✅ Yes | Regex pattern |
+| PowerShell base64 decode (`FromBase64String`) | MEDIUM | ✅ Yes | Regex pattern |
 | Hex-encoded strings | HIGH | ✅ Yes | Regex pattern |
 | Octal-encoded strings | HIGH | ✅ Yes | Regex pattern |
 | Bash substring obfuscation (`${var::n:m}`) | MEDIUM | ✅ Yes | Regex pattern |
