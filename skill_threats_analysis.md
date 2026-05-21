@@ -177,14 +177,14 @@ Based on research from:
 | Category | Threats Identified | Scanner Detects | Coverage |
 |----------|-------------------|-----------------|----------|
 | Dangerous Shell Execution | 17 | 17 | **100%** |
-| Data Exfiltration | 19 | 19 | **100%** |
+| Data Exfiltration | 28 | 28 | **100%** |
 | Suspicious URLs | 14 | 14 | **100%** |
 | Obfuscation | 12 | 10 | **83%** |
 | Supply Chain | 15 | 11 | **73%** |
 | Prompt Injection | 19 | 16 | **84%** |
 | Memory Poisoning | 10 | 7 | **70%** |
-| Social Engineering | 10 | 8 | **80%** |
-| **Total** | **116** | **102** | **88%** |
+| Social Engineering | 13 | 11 | **85%** |
+| **Total** | **128** | **114** | **89%** |
 
 ---
 
