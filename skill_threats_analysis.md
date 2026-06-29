@@ -176,15 +176,37 @@ Based on research from:
 
 | Category | Threats Identified | Scanner Detects | Coverage |
 |----------|-------------------|-----------------|----------|
-| Dangerous Shell Execution | 17 | 17 | **100%** |
-| Data Exfiltration | 19 | 19 | **100%** |
+| Dangerous Shell Execution | 23 | 23 | **100%** |
+| Data Exfiltration | 25 | 25 | **100%** |
 | Suspicious URLs | 14 | 14 | **100%** |
 | Obfuscation | 12 | 10 | **83%** |
 | Supply Chain | 15 | 11 | **73%** |
 | Prompt Injection | 19 | 16 | **84%** |
 | Memory Poisoning | 10 | 7 | **70%** |
 | Social Engineering | 10 | 8 | **80%** |
-| **Total** | **116** | **102** | **88%** |
+| **Total** | **128** | **114** | **89%** |
+
+The pattern-list categories above are complemented by structural and
+harness-level detectors that do not live in a regex list (see below).
+
+---
+
+## Structural & Harness Detectors (non-pattern)
+
+Several of the most successful real-world attacks ([Dangerous Skills,
+gricha.dev](https://gricha.dev/blog/dangerous-skills)) do not live in a
+single line of scannable text. These are handled by dedicated detectors
+rather than the regex pattern lists:
+
+| Attack vector | Detector | Severity |
+|---------------|----------|----------|
+| Frontmatter `hooks:` auto-run by the harness | `_check_suspicious_metadata_from_ast` | HIGH (CRITICAL if hook command is dangerous) |
+| `!` pre-prompt command directive (expanded at skill-load) | `_check_command_directives` | CRITICAL |
+| Symlink disguised as an example file (e.g. -> `~/.ssh/id_rsa`) | `_check_symlinks` | LOW / HIGH (escapes dir) / CRITICAL (sensitive target) |
+| Instructions hidden in image metadata (PNG/JPEG/GIF/WebP/ICO) | `_scan_image_metadata` (PNG `tEXt`/`zTXt`/`iTXt`, JPEG `COM`/EXIF, GIF comment/app extensions, WebP `EXIF`/`XMP `, PNG-encoded ICO frames) | inherits matched-pattern severity; HIGH for instruction-like text |
+| `npm` lifecycle hooks (`postinstall`, etc.) | `_check_package_json` | HIGH (CRITICAL if command is dangerous) |
+| `conftest.py` / `test_*.py` auto-executed by pytest | `scan_file` pytest auto-exec check | HIGH |
+| Writes to global agent memory (`~/.claude/CLAUDE.md`, `AGENTS.md`) | `memory_poisoning` patterns | HIGH / CRITICAL |
 
 ---
 

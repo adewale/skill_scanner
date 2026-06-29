@@ -25,15 +25,27 @@ Matches are mapped back to the original bytes so findings still show the raw, ob
 
 ## Detection Engine
 
-The core is **272+ regex patterns across 8 categories**: dangerous shell commands, data exfiltration, suspicious URLs, obfuscation, social engineering, prompt injection, memory poisoning, and supply chain risks. Each pattern has a severity (CRITICAL through INFO).
+The core is **272+ regex patterns across 8 categories**: dangerous shell commands (including scripting-language exec sinks like `os.system`/`subprocess(shell=True)`), data exfiltration, suspicious URLs, obfuscation, social engineering, prompt injection, memory poisoning, and supply chain risks. Each pattern has a severity (CRITICAL through INFO). These 8 pattern-list categories are joined by a 9th, `harness_abuse`, raised only by the structural detectors below.
 
 Three layers reduce false positives:
 
 1. **Whitelists** -- TypeScript `Env` type patterns and safe localhost dev ports (3000, 5173, 8787, etc.) are skipped via `_should_skip_finding()`.
-2. **Severity adjustment** -- `_adjust_severity_for_context()` downgrades findings in documentation languages (TypeScript, Python examples) and upgrades findings in executable languages (bash, sh).
+2. **Severity adjustment** -- `_adjust_severity_for_context()` downgrades findings in documentation languages (TypeScript, Python examples) and upgrades findings in executable languages (bash, sh). This is what lets `os.system(...)` be a low-noise example in a docs code block but a HIGH finding in a real `.py` file.
 3. **AST-aware scanning** -- Code blocks, prose, and hidden content (HTML comments) are scanned separately with category-appropriate patterns. Prose only gets checked for prompt injection, memory poisoning, and social engineering.
 
 A special heuristic (`_check_base64_blobs()`) decodes any base64 string over 100 chars and checks if it contains shell keywords (the decoded text is also confusable-folded first).
+
+## Structural & Harness Detectors
+
+Pattern matching only sees readable text in scanned files. The most effective real-world attacks ([Dangerous Skills](https://gricha.dev/blog/dangerous-skills)) hide elsewhere, so dedicated detectors run alongside the pattern engine:
+
+- **Frontmatter hooks** (`_check_suspicious_metadata_from_ast`) -- a `hooks:` key in YAML frontmatter is executed by the harness on load; flagged HIGH, escalated to CRITICAL if a hook command matches a dangerous-shell pattern. Category `harness_abuse`.
+- **Symlinks** (`_check_symlinks`) -- every symlink in the tree is reported (LOW), escalated to HIGH when it resolves outside the skill directory and CRITICAL when it targets a sensitive path. Symlink targets are never followed into the file scanners.
+- **Image metadata** (`_scan_image_metadata`) -- PNG `tEXt`/`zTXt`/`iTXt` chunks, JPEG `COM`/EXIF segments, GIF comment/application extensions, WebP `EXIF`/`XMP ` RIFF chunks, and PNG-encoded ICO frames are decoded with the standard library (`zlib`), then run through the full pattern engine plus an instruction-shaped-text heuristic. Images are no longer skipped wholesale.
+- **`!` command directive** (`_check_command_directives`) -- any non-fenced markdown line beginning with `! <command>` is flagged CRITICAL regardless of which binary it names, since the harness runs it verbatim at load time; markdown image embeds (`![alt](url)`) are excluded.
+- **npm lifecycle hooks** (`_check_package_json`) -- `package.json` is parsed and `preinstall`/`postinstall`/`prepare`/... scripts are flagged HIGH (CRITICAL if the command is dangerous), because npm runs them automatically.
+- **pytest auto-run** (`scan_file`) -- `conftest.py` and `test_*.py`/`*_test.py` are flagged HIGH because pytest imports and executes them on collection.
+- **Global memory writes** (`_check_memory_writes`) -- writes/references to `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, and sibling config files are matched against the **raw** (un-folded) text, because confusable folding rewrites the literal `claude` (`cl` -> `d`). Homoglyph spellings are still caught by `_check_homoglyphs`.
 
 ## Provenance and Trust
 
@@ -56,13 +68,20 @@ main() -> get_default_skill_paths() -> scan_skill() for each
   scan_skill():
     extract_provenance() -> trust score + official status
     analyze_skill_structure() -> risk score
-    scan_file(SKILL.md) -> parse_skill_ast() -> scan_code_blocks()
-                                             -> scan_hidden_content()
-                                             -> scan prose
-                                             -> check base64 blobs
-                                             -> check homoglyphs
-                                             -> check IDN homographs
-    scan_file() for all other files
+    _check_symlinks() -> symlink findings (targets never followed)
+    scan_file(SKILL.md) -> scan_content() -> parse_skill_ast()
+                              -> scan_code_blocks()
+                              -> scan_hidden_content()
+                              -> _check_suspicious_metadata (hooks)
+                              -> _check_command_directives (! directive)
+                              -> scan prose
+                              -> check base64 / homoglyphs / IDN
+                              -> _check_memory_writes (global config)
+    for each remaining file:
+      *.png/.jpg/.jpeg/.gif/.webp -> _scan_image_metadata()
+      package.json     -> scan_file() + _check_package_json()
+      conftest.py/test_*.py -> scan_file() (pytest auto-run flag)
+      symlinks         -> skipped (already reported above)
   -> ScanResult with findings list
 -> print or JSON output
 ```
