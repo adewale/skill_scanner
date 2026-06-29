@@ -1920,27 +1920,6 @@ class SkillScanner:
         fenced code blocks are illustrative and are skipped.
         """
         findings: list[Finding] = []
-        commandish = {
-            "bash",
-            "sh",
-            "zsh",
-            "fish",
-            "python",
-            "python3",
-            "node",
-            "npm",
-            "npx",
-            "curl",
-            "wget",
-            "eval",
-            "exec",
-            "sudo",
-            "ruby",
-            "perl",
-            "go",
-            "deno",
-            "bun",
-        }
         in_fence = False
         for line_num, raw_line in enumerate(content.split("\n"), 1):
             stripped = raw_line.strip()
@@ -1949,16 +1928,16 @@ class SkillScanner:
                 continue
             if in_fence:
                 continue
-            match = re.match(r"^!\s*`?\s*([^\s`(]+)", raw_line.lstrip())
-            if not match:
-                continue
-            token = match.group(1)
-            is_command = (
-                token in commandish
-                or token.startswith(("./", "/", "~", "../"))
-                or bool(re.search(r"\.(sh|py|js|rb|pl)$", token))
+            # The harness expands ANY line beginning with `!` by running
+            # the command, regardless of which binary it names, so flag
+            # the directive itself. The leading-char class requires a
+            # command-like token (letter/digit/./~/_/-), which excludes
+            # markdown image embeds (`![alt](url)`) and bare punctuation.
+            match = re.match(
+                r"^!\s*`?\s*([A-Za-z0-9./~_-][^\s`]*)",
+                raw_line.lstrip(),
             )
-            if not is_command:
+            if not match:
                 continue
             findings.append(
                 Finding(
@@ -2354,11 +2333,41 @@ class SkillScanner:
             pos = end + (size & 1)  # chunks are padded to an even size
         return "\n".join(p for p in parts if p.strip())
 
+    @staticmethod
+    def _extract_ico_text(data: bytes) -> str:
+        """Extract text from PNG-encoded frames inside an ICO file.
+
+        Since Windows Vista, ICO entries may hold a full PNG instead of
+        a BMP, so a PNG carrying tEXt/zTXt/iTXt instructions can hide in
+        an icon. BMP entries have no text metadata and are ignored.
+        """
+        # ICONDIR: reserved=0, type=1 (icon) -> b"\x00\x00\x01\x00".
+        if len(data) < 6 or data[:4] != b"\x00\x00\x01\x00":
+            return ""
+        count = int.from_bytes(data[4:6], "little")
+        total = len(data)
+        parts: list[str] = []
+        for i in range(count):
+            entry = 6 + i * 16
+            if entry + 16 > total:
+                break
+            size = int.from_bytes(data[entry + 8 : entry + 12], "little")
+            offset = int.from_bytes(data[entry + 12 : entry + 16], "little")
+            if size <= 0 or offset + size > total:
+                continue
+            blob = data[offset : offset + size]
+            if blob.startswith(b"\x89PNG\r\n\x1a\n"):
+                text = SkillScanner._extract_png_text(blob)
+                if text:
+                    parts.append(text)
+        return "\n".join(p for p in parts if p.strip())
+
     def _extract_image_text(self, file_path: Path) -> str:
         """Return text embedded in an image's metadata.
 
         Supports PNG (tEXt/zTXt/iTXt), JPEG (COM/EXIF), GIF (comment and
-        application extensions) and WebP (EXIF/XMP chunks).
+        application extensions), WebP (EXIF/XMP chunks) and ICO
+        (PNG-encoded frames).
         """
         try:
             data = file_path.read_bytes()
@@ -2373,6 +2382,8 @@ class SkillScanner:
             return self._extract_gif_text(data)
         if suffix == ".webp":
             return self._extract_webp_text(data)
+        if suffix == ".ico":
+            return self._extract_ico_text(data)
         return ""
 
     def _scan_image_metadata(self, file_path: Path) -> list[Finding]:
@@ -3062,10 +3073,16 @@ class SkillScanner:
             )
 
         # Image formats whose metadata we parse for hidden instructions
-        image_extensions = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+        image_extensions = {
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".webp",
+            ".ico",
+        }
         # Binary formats with no useful text to scan
         skip_extensions = {
-            ".ico",
             ".woff",
             ".woff2",
             ".ttf",
