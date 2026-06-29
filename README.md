@@ -79,7 +79,7 @@ uv run skill_scanner.py --list-paths
 
 Several high-impact attacks ([Dangerous Skills](https://gricha.dev/blog/dangerous-skills)) do not live in scannable prose, so dedicated structural detectors handle them:
 
-- **Image metadata** -- PNG `tEXt`/`zTXt`/`iTXt` chunks and JPEG comment/EXIF fields are decoded (pure stdlib) and scanned for hidden instructions.
+- **Image metadata** -- PNG `tEXt`/`zTXt`/`iTXt` chunks, JPEG comment/EXIF fields, GIF comment/application extensions, and WebP EXIF/XMP chunks are decoded (pure stdlib) and scanned for hidden instructions.
 - **Symlinks** -- any symlink in a skill is reported; ones escaping the skill directory or targeting a sensitive path (e.g. `~/.ssh/id_rsa`) are escalated, and their targets are never followed.
 - **Harness features** -- frontmatter `hooks:` and `!` command directives are flagged because the harness runs them with no model mediation.
 - **Ecosystem auto-run** -- `npm` install lifecycle hooks and pytest's `conftest.py`/`test_*.py` are flagged as code that executes without the agent choosing to run it.

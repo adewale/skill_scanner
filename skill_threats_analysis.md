@@ -203,7 +203,7 @@ rather than the regex pattern lists:
 | Frontmatter `hooks:` auto-run by the harness | `_check_suspicious_metadata_from_ast` | HIGH (CRITICAL if hook command is dangerous) |
 | `!` pre-prompt command directive (expanded at skill-load) | `_check_command_directives` | CRITICAL |
 | Symlink disguised as an example file (e.g. -> `~/.ssh/id_rsa`) | `_check_symlinks` | LOW / HIGH (escapes dir) / CRITICAL (sensitive target) |
-| Instructions hidden in PNG/JPEG image metadata | `_scan_image_metadata` (`tEXt`/`zTXt`/`iTXt`, JPEG `COM`/EXIF) | inherits matched-pattern severity; HIGH for instruction-like text |
+| Instructions hidden in image metadata (PNG/JPEG/GIF/WebP) | `_scan_image_metadata` (PNG `tEXt`/`zTXt`/`iTXt`, JPEG `COM`/EXIF, GIF comment/app extensions, WebP `EXIF`/`XMP `) | inherits matched-pattern severity; HIGH for instruction-like text |
 | `npm` lifecycle hooks (`postinstall`, etc.) | `_check_package_json` | HIGH (CRITICAL if command is dangerous) |
 | `conftest.py` / `test_*.py` auto-executed by pytest | `scan_file` pytest auto-exec check | HIGH |
 | Writes to global agent memory (`~/.claude/CLAUDE.md`, `AGENTS.md`) | `memory_poisoning` patterns | HIGH / CRITICAL |

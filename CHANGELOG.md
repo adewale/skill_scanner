@@ -13,9 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   dedicated detectors for the attacks that pattern matching alone misses,
   plus new patterns for the ones it can:
   - **Image metadata injection** (`_scan_image_metadata`): PNG
-    `tEXt`/`zTXt`/`iTXt` chunks and JPEG `COM`/EXIF segments are decoded
-    with the standard library and scanned for hidden instructions. Images
-    are no longer skipped wholesale.
+    `tEXt`/`zTXt`/`iTXt` chunks, JPEG `COM`/EXIF segments, GIF
+    comment/application extensions, and WebP `EXIF`/`XMP ` chunks are
+    decoded with the standard library and scanned for hidden
+    instructions. Images are no longer skipped wholesale.
   - **Symlink exfiltration** (`_check_symlinks`): symlinks are reported
     (LOW), escalated to HIGH when they escape the skill directory and
     CRITICAL when they target a sensitive path (e.g. `~/.ssh/id_rsa`);
@@ -50,7 +51,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   flags any token mixing Latin with a look-alike script (plus non-Latin
   words that spell a sensitive command), and `_check_idn_homographs`
   decodes `xn--` punycode labels to catch IDN homograph domains.
-- **Test suite** with 234 tests across three tiers:
+- **Test suite** with 240 tests across three tiers:
   - Tier 1 (`test_infrastructure.py`): Unit tests for dataclasses, trust/risk scoring, AST parsing, whitelists, severity adjustment, provenance/structure analysis
   - Tier 2 (`test_scanning.py`): Detection tests for all 8 pattern categories (positive + false-positive), integration tests via pyfakefs
   - Tier 3 (`test_documentation.py`): Cross-references docs against code to catch documentation drift

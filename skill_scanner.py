@@ -2274,8 +2274,92 @@ class SkillScanner:
             pos = seg_end
         return "\n".join(p for p in parts if p.strip())
 
+    @staticmethod
+    def _extract_gif_text(data: bytes) -> str:
+        """Extract text from GIF comment/application/plain-text extensions.
+
+        Walks the GIF block structure so sub-block data is read from the
+        real extension blocks (introducer 0x21) rather than image data.
+        """
+        if not (data.startswith(b"GIF87a") or data.startswith(b"GIF89a")):
+            return ""
+        parts: list[str] = []
+        total = len(data)
+        if total < 13:
+            return ""
+        # Logical Screen Descriptor: skip the global color table if present.
+        packed = data[10]
+        pos = 13
+        if packed & 0x80:
+            pos += 3 * (2 ** ((packed & 0x07) + 1))
+
+        def _read_sub_blocks(start: int) -> tuple[bytes, int]:
+            chunks: list[bytes] = []
+            cur = start
+            while cur < total:
+                size = data[cur]
+                cur += 1
+                if size == 0:
+                    break
+                if cur + size > total:
+                    return b"".join(chunks), total
+                chunks.append(data[cur : cur + size])
+                cur += size
+            return b"".join(chunks), cur
+
+        while pos < total:
+            block = data[pos]
+            if block == 0x3B:  # trailer
+                break
+            if block == 0x21:  # extension introducer
+                if pos + 1 >= total:
+                    break
+                label = data[pos + 1]
+                payload, pos = _read_sub_blocks(pos + 2)
+                if label in (0xFE, 0xFF, 0x01):
+                    parts.append(payload.decode("latin-1", "ignore"))
+            elif block == 0x2C:  # image descriptor
+                if pos + 10 > total:
+                    break
+                img_packed = data[pos + 9]
+                pos += 10
+                if img_packed & 0x80:
+                    pos += 3 * (2 ** ((img_packed & 0x07) + 1))
+                pos += 1  # LZW minimum code size
+                _, pos = _read_sub_blocks(pos)
+            else:
+                break
+        return "\n".join(p for p in parts if p.strip())
+
+    @staticmethod
+    def _extract_webp_text(data: bytes) -> str:
+        """Extract text from WebP EXIF and XMP RIFF chunks."""
+        if not (data[:4] == b"RIFF" and data[8:12] == b"WEBP"):
+            return ""
+        parts: list[str] = []
+        pos = 12
+        total = len(data)
+        while pos + 8 <= total:
+            fourcc = data[pos : pos + 4]
+            size = int.from_bytes(data[pos + 4 : pos + 8], "little")
+            start = pos + 8
+            end = start + size
+            if end > total:
+                break
+            chunk = data[start:end]
+            if fourcc == b"EXIF":
+                parts.append(SkillScanner._printable_runs(chunk))
+            elif fourcc == b"XMP ":
+                parts.append(chunk.decode("utf-8", "ignore"))
+            pos = end + (size & 1)  # chunks are padded to an even size
+        return "\n".join(p for p in parts if p.strip())
+
     def _extract_image_text(self, file_path: Path) -> str:
-        """Return text embedded in a PNG/JPEG image's metadata."""
+        """Return text embedded in an image's metadata.
+
+        Supports PNG (tEXt/zTXt/iTXt), JPEG (COM/EXIF), GIF (comment and
+        application extensions) and WebP (EXIF/XMP chunks).
+        """
         try:
             data = file_path.read_bytes()
         except OSError:
@@ -2285,6 +2369,10 @@ class SkillScanner:
             return self._extract_png_text(data)
         if suffix in (".jpg", ".jpeg"):
             return self._extract_jpeg_text(data)
+        if suffix == ".gif":
+            return self._extract_gif_text(data)
+        if suffix == ".webp":
+            return self._extract_webp_text(data)
         return ""
 
     def _scan_image_metadata(self, file_path: Path) -> list[Finding]:
@@ -2974,12 +3062,10 @@ class SkillScanner:
             )
 
         # Image formats whose metadata we parse for hidden instructions
-        image_extensions = {".png", ".jpg", ".jpeg"}
+        image_extensions = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
         # Binary formats with no useful text to scan
         skip_extensions = {
-            ".gif",
             ".ico",
-            ".webp",
             ".woff",
             ".woff2",
             ".ttf",
