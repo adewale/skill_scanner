@@ -65,14 +65,24 @@ uv run skill_scanner.py --list-paths
 
 ## Detection categories
 
-- **dangerous_shell** -- piped execution, reverse shells, privilege escalation
-- **exfiltration** -- access to SSH keys, AWS credentials, browser data, crypto wallets
+- **dangerous_shell** -- piped execution, reverse shells, privilege escalation, scripting-language exec sinks (`os.system`, `subprocess(shell=True)`, `child_process`)
+- **exfiltration** -- access to SSH keys, AWS/GCP/k8s credentials, `.netrc`/`.git-credentials`, browser data, crypto wallets
 - **suspicious_url** -- URL shorteners, paste sites, direct IP URLs
 - **obfuscation** -- base64 payloads, eval/exec, hex-encoded strings, Unicode homoglyphs
 - **social_engineering** -- urgency tactics, copy-paste-run instructions
 - **prompt_injection** -- guardrail bypass, role manipulation, hidden instructions
-- **memory_poisoning** -- persistent agent memory/behavior modification
-- **supply_chain** -- unpinned dependencies, remote binary downloads
+- **memory_poisoning** -- persistent agent memory/behavior modification, writes to global config (`~/.claude/CLAUDE.md`, `AGENTS.md`)
+- **harness_abuse** -- frontmatter `hooks:` and the `!` pre-prompt directive that the harness executes automatically on skill load
+- **supply_chain** -- unpinned dependencies, remote binary downloads, `npm` lifecycle hooks (`postinstall`), pytest-autorun `conftest.py`/`test_*.py`
+
+## Beyond text patterns
+
+Several high-impact attacks ([Dangerous Skills](https://gricha.dev/blog/dangerous-skills)) do not live in scannable prose, so dedicated structural detectors handle them:
+
+- **Image metadata** -- PNG `tEXt`/`zTXt`/`iTXt` chunks and JPEG comment/EXIF fields are decoded (pure stdlib) and scanned for hidden instructions.
+- **Symlinks** -- any symlink in a skill is reported; ones escaping the skill directory or targeting a sensitive path (e.g. `~/.ssh/id_rsa`) are escalated, and their targets are never followed.
+- **Harness features** -- frontmatter `hooks:` and `!` command directives are flagged because the harness runs them with no model mediation.
+- **Ecosystem auto-run** -- `npm` install lifecycle hooks and pytest's `conftest.py`/`test_*.py` are flagged as code that executes without the agent choosing to run it.
 
 ## Evasion resistance
 

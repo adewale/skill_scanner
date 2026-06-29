@@ -34,6 +34,7 @@ import sys
 import unicodedata
 import urllib.parse
 import urllib.request
+import zlib
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from enum import Enum
@@ -800,6 +801,41 @@ class SkillScanner:
             Severity.LOW,
             "Process disowning",
         ),
+        # Code-execution sinks in scripting languages. These are how a
+        # trojan helper script, conftest.py, or npm postinstall actually
+        # runs a payload when the syntax is not raw shell. In doc-language
+        # code blocks these are downgraded by _adjust_severity_for_context;
+        # in real .py/.js files they keep full severity.
+        (
+            r"os\.system\s*\(",
+            Severity.HIGH,
+            "Python os.system() command execution",
+        ),
+        (
+            r"subprocess\.\w+\([^)]*shell\s*=\s*True",
+            Severity.HIGH,
+            "subprocess call with shell=True",
+        ),
+        (
+            r"os\.popen\s*\(",
+            Severity.HIGH,
+            "Python os.popen() command execution",
+        ),
+        (
+            r"pty\.spawn\s*\(",
+            Severity.HIGH,
+            "pty.spawn() (interactive shell spawning)",
+        ),
+        (
+            r"child_process\.(exec|execSync|spawn)\s*\(",
+            Severity.HIGH,
+            "Node child_process command execution",
+        ),
+        (
+            r"__import__\s*\(\s*['\"]os['\"]",
+            Severity.MEDIUM,
+            "Dynamic os import (obfuscated execution)",
+        ),
     ]
 
     # Data exfiltration patterns
@@ -824,6 +860,36 @@ class SkillScanner:
             r"~?/?\.gnupg/",
             Severity.HIGH,
             "GPG keyring access",
+        ),
+        (
+            r"~?/?\.ssh/(id_dsa|id_ecdsa)\b",
+            Severity.CRITICAL,
+            "SSH private key access",
+        ),
+        (
+            r"~?/?\.git-credentials\b",
+            Severity.CRITICAL,
+            "Git credential store access",
+        ),
+        (
+            r"~?/?\.netrc\b",
+            Severity.HIGH,
+            "netrc credentials access",
+        ),
+        (
+            r"~?/?\.kube/config\b",
+            Severity.HIGH,
+            "Kubernetes credentials access",
+        ),
+        (
+            r"~?/?\.config/gcloud/",
+            Severity.HIGH,
+            "Google Cloud credentials access",
+        ),
+        (
+            r"~?/?\.npmrc\b",
+            Severity.MEDIUM,
+            "npm auth token file access",
         ),
         (
             r"~?/?\.env\b",
@@ -1230,6 +1296,35 @@ class SkillScanner:
         ),
     ]
 
+    # Writes to global agent memory/config files (cross-session
+    # persistence). These are matched against RAW (un-folded) text by
+    # _check_memory_writes rather than the folded pattern pipeline,
+    # because confusable folding rewrites the literal "claude"
+    # (cl -> d) and would corrupt the keyword. Homoglyph spellings of
+    # the paths are still caught independently by _check_homoglyphs.
+    GLOBAL_MEMORY_PATTERNS: ClassVar[list[tuple[str, Severity, str]]] = [
+        (
+            r"(>>?|\btee\b|cp\s|mv\s|install\s)[^\n]{0,80}"
+            r"\.(claude|codex|cursor|gemini)/",
+            Severity.CRITICAL,
+            "Write to global agent config directory (persistence)",
+        ),
+        (
+            r"(echo|printf|cat|write|append|add|insert|tee)"
+            r"[^\n]{0,60}\b(CLAUDE|AGENTS|GEMINI)\.md",
+            Severity.HIGH,
+            "Modifying global agent instructions "
+            "(CLAUDE.md/AGENTS.md/GEMINI.md)",
+        ),
+        (
+            r"\.(claude|codex|cursor|gemini)/"
+            r"(CLAUDE|AGENTS|GEMINI|settings|config)"
+            r"\.(md|json|toml)",
+            Severity.HIGH,
+            "Reference to global agent config/memory file",
+        ),
+    ]
+
     # Supply chain risk patterns
     SUPPLY_CHAIN_PATTERNS: ClassVar[list[tuple[str, Severity, str]]] = [
         # npx without version pinning
@@ -1444,6 +1539,9 @@ class SkillScanner:
                     file_path,
                 ),
             )
+            findings.extend(
+                self._check_command_directives(content, file_path),
+            )
 
             # Also scan prose content (non-code-block text)
             # for prompt injection
@@ -1562,6 +1660,9 @@ class SkillScanner:
         findings.extend(
             self._check_idn_homographs(content, file_path),
         )
+        findings.extend(
+            self._check_memory_writes(content, file_path),
+        )
 
         return findings
 
@@ -1576,6 +1677,37 @@ class SkillScanner:
 
         if not metadata:
             return findings
+
+        # Frontmatter hooks are executed by the harness (Claude Code)
+        # when the skill loads -- the agent never gets to refuse. Flag
+        # their presence and escalate if a hook command looks dangerous.
+        hooks = metadata.get("hooks")
+        if hooks:
+            hooks_str = json.dumps(hooks)
+            folded = normalize_confusables(hooks_str)
+            severity = Severity.HIGH
+            description = (
+                "Skill defines harness hooks in frontmatter "
+                "(executed automatically on load)"
+            )
+            for pattern, _sev, _desc in self.DANGEROUS_SHELL_PATTERNS:
+                if re.search(pattern, folded, re.IGNORECASE):
+                    severity = Severity.CRITICAL
+                    description = (
+                        "Frontmatter hook contains a dangerous command "
+                        "(auto-executed by the harness)"
+                    )
+                    break
+            findings.append(
+                Finding(
+                    severity=severity,
+                    category="harness_abuse",
+                    description=description,
+                    file_path=file_path,
+                    matched_content=hooks_str[:100],
+                    recommendation=(self._get_recommendation("harness_abuse")),
+                )
+            )
 
         # Check for suspicious binary requirements
         if "metadata" in metadata:
@@ -1775,6 +1907,440 @@ class SkillScanner:
             )
         return findings
 
+    def _check_command_directives(
+        self,
+        content: str,
+        file_path: str,
+    ) -> list[Finding]:
+        """Flag the Claude Code ``!`` pre-prompt command directive.
+
+        A line beginning with ``!`` is expanded at skill-load time by
+        running the shell command and inlining its output -- executed
+        blindly by the harness, with no model mediation. Lines inside
+        fenced code blocks are illustrative and are skipped.
+        """
+        findings: list[Finding] = []
+        commandish = {
+            "bash",
+            "sh",
+            "zsh",
+            "fish",
+            "python",
+            "python3",
+            "node",
+            "npm",
+            "npx",
+            "curl",
+            "wget",
+            "eval",
+            "exec",
+            "sudo",
+            "ruby",
+            "perl",
+            "go",
+            "deno",
+            "bun",
+        }
+        in_fence = False
+        for line_num, raw_line in enumerate(content.split("\n"), 1):
+            stripped = raw_line.strip()
+            if stripped.startswith(("```", "~~~")):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                continue
+            match = re.match(r"^!\s*`?\s*([^\s`(]+)", raw_line.lstrip())
+            if not match:
+                continue
+            token = match.group(1)
+            is_command = (
+                token in commandish
+                or token.startswith(("./", "/", "~", "../"))
+                or bool(re.search(r"\.(sh|py|js|rb|pl)$", token))
+            )
+            if not is_command:
+                continue
+            findings.append(
+                Finding(
+                    severity=Severity.CRITICAL,
+                    category="harness_abuse",
+                    description=(
+                        "Pre-prompt command directive (`!`) -- executed "
+                        "by the harness at skill-load time"
+                    ),
+                    file_path=file_path,
+                    line_number=line_num,
+                    matched_content=stripped[:100],
+                    recommendation=(self._get_recommendation("harness_abuse")),
+                )
+            )
+        return findings
+
+    def _check_memory_writes(
+        self,
+        content: str,
+        file_path: str,
+    ) -> list[Finding]:
+        """Flag writes/references to global agent memory/config files.
+
+        Matched against the RAW text (not the confusable-folded text the
+        pattern pipeline uses) because folding rewrites "claude" and
+        would corrupt the keyword. Homoglyph spellings are still caught
+        independently by _check_homoglyphs.
+        """
+        findings: list[Finding] = []
+        seen: set[str] = set()
+        for pattern, severity, description in self.GLOBAL_MEMORY_PATTERNS:
+            match = re.search(pattern, content, re.IGNORECASE)
+            if not match or description in seen:
+                continue
+            seen.add(description)
+            findings.append(
+                Finding(
+                    severity=severity,
+                    category="memory_poisoning",
+                    description=description,
+                    file_path=file_path,
+                    matched_content=match.group(0)[:100],
+                    recommendation=(
+                        self._get_recommendation("memory_poisoning")
+                    ),
+                )
+            )
+        return findings
+
+    def _check_symlinks(self, skill_path: Path) -> list[Finding]:
+        """Flag symlinks anywhere in a skill tree.
+
+        A relative symlink disguised as an example file (e.g.
+        ``examples/id_rsa.example`` -> ``../../../.ssh/id_rsa``) makes
+        the agent read a credential outside the skill when it follows
+        an innocent "read the example" instruction. Symlinks are never
+        required by a legitimate skill, so any symlink is reported;
+        those escaping the skill directory or targeting a sensitive
+        path are escalated.
+        """
+        sensitive = (
+            ".ssh",
+            "id_rsa",
+            "id_ed25519",
+            "id_ecdsa",
+            "id_dsa",
+            ".aws",
+            "credentials",
+            ".gnupg",
+            ".netrc",
+            ".kube",
+            ".docker/config",
+            ".config/gcloud",
+            ".npmrc",
+            ".pypirc",
+            ".git-credentials",
+            "/etc/",
+            ".bitcoin",
+            ".electrum",
+            ".exodus",
+            "keychain",
+            "wallet",
+        )
+        findings: list[Finding] = []
+        try:
+            skill_root = skill_path.resolve()
+        except OSError:
+            skill_root = skill_path
+        try:
+            entries = list(skill_path.rglob("*"))
+        except OSError:
+            return findings
+        for entry in entries:
+            if not entry.is_symlink():
+                continue
+            try:
+                raw_target = os.readlink(entry)
+            except OSError:
+                raw_target = ""
+            try:
+                resolved = entry.resolve()
+            except OSError:
+                resolved = None
+            haystack = f"{raw_target} {resolved or ''}".lower()
+            if any(marker in haystack for marker in sensitive):
+                severity = Severity.CRITICAL
+                description = (
+                    "Symlink targets a sensitive path (credential "
+                    "exfiltration via 'read the example file')"
+                )
+            else:
+                escapes = True
+                if resolved is not None:
+                    try:
+                        resolved.relative_to(skill_root)
+                        escapes = False
+                    except ValueError:
+                        escapes = True
+                if escapes:
+                    severity = Severity.HIGH
+                    description = "Symlink points outside the skill directory"
+                else:
+                    severity = Severity.LOW
+                    description = "Symlink inside skill directory"
+            findings.append(
+                Finding(
+                    severity=severity,
+                    category="exfiltration",
+                    description=description,
+                    file_path=str(entry),
+                    matched_content=f"{entry.name} -> {raw_target}"[:100],
+                    recommendation=(
+                        "Skills should not contain symlinks. Remove it "
+                        "or verify the target is inside the skill and "
+                        "benign."
+                    ),
+                )
+            )
+        return findings
+
+    def _check_package_json(
+        self,
+        file_path: Path,
+        content: str,
+    ) -> list[Finding]:
+        """Flag npm lifecycle hooks (preinstall/postinstall/...).
+
+        These scripts run automatically when ``npm install`` resolves
+        the package -- a supply-chain RCE vector that needs no agent
+        action at all.
+        """
+        findings: list[Finding] = []
+        try:
+            data = json.loads(content)
+        except (json.JSONDecodeError, ValueError):
+            return findings
+        if not isinstance(data, dict):
+            return findings
+        scripts = data.get("scripts")
+        if not isinstance(scripts, dict):
+            return findings
+        lifecycle = {
+            "preinstall",
+            "install",
+            "postinstall",
+            "prepare",
+            "prepublish",
+            "prepublishOnly",
+            "preuninstall",
+            "postuninstall",
+            "prepack",
+            "postpack",
+        }
+        for name, command in scripts.items():
+            if name not in lifecycle:
+                continue
+            command_str = str(command)
+            folded = normalize_confusables(command_str)
+            severity = Severity.HIGH
+            description = (
+                f"npm lifecycle hook '{name}' runs automatically on install"
+            )
+            for pattern, _sev, _desc in self.DANGEROUS_SHELL_PATTERNS:
+                if re.search(pattern, folded, re.IGNORECASE):
+                    severity = Severity.CRITICAL
+                    description = (
+                        f"npm lifecycle hook '{name}' contains a "
+                        "dangerous command (auto-executed on install)"
+                    )
+                    break
+            findings.append(
+                Finding(
+                    severity=severity,
+                    category="supply_chain",
+                    description=description,
+                    file_path=str(file_path),
+                    matched_content=f"{name}: {command_str}"[:100],
+                    recommendation=(
+                        "npm runs install lifecycle scripts "
+                        "automatically. Audit or remove pre/post-install "
+                        "hooks."
+                    ),
+                )
+            )
+        return findings
+
+    @staticmethod
+    def _printable_runs(data: bytes, minlen: int = 4) -> str:
+        """Return printable-ASCII runs of ``data`` joined by newlines."""
+        runs: list[str] = []
+        current = bytearray()
+        for byte in data:
+            if 32 <= byte < 127:
+                current.append(byte)
+                continue
+            if len(current) >= minlen:
+                runs.append(current.decode("ascii", "ignore"))
+            current = bytearray()
+        if len(current) >= minlen:
+            runs.append(current.decode("ascii", "ignore"))
+        return "\n".join(runs)
+
+    @staticmethod
+    def _decode_itxt(chunk: bytes) -> str:
+        """Decode a PNG ``iTXt`` chunk to ``keyword: text``."""
+        keyword, _, rest = chunk.partition(b"\x00")
+        if len(rest) < 2:
+            return ""
+        compression_flag = rest[0]
+        after = rest[2:]
+        _lang, _, after = after.partition(b"\x00")
+        _transkw, _, text = after.partition(b"\x00")
+        if compression_flag == 1:
+            try:
+                text = zlib.decompress(text)
+            except zlib.error:
+                return ""
+        decoded = text.decode("utf-8", "ignore")
+        return f"{keyword.decode('utf-8', 'ignore')}: {decoded}"
+
+    @staticmethod
+    def _extract_png_text(data: bytes) -> str:
+        """Extract text from PNG tEXt/zTXt/iTXt metadata chunks."""
+        if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+            return ""
+        parts: list[str] = []
+        pos = 8
+        total = len(data)
+        while pos + 8 <= total:
+            length = int.from_bytes(data[pos : pos + 4], "big")
+            ctype = data[pos + 4 : pos + 8]
+            start = pos + 8
+            end = start + length
+            if end > total:
+                break
+            chunk = data[start:end]
+            if ctype == b"tEXt":
+                keyword, _, text = chunk.partition(b"\x00")
+                parts.append(
+                    keyword.decode("latin-1", "ignore")
+                    + ": "
+                    + text.decode("latin-1", "ignore")
+                )
+            elif ctype == b"zTXt":
+                keyword, _, rest = chunk.partition(b"\x00")
+                compressed = rest[1:] if rest else b""
+                try:
+                    text = zlib.decompress(compressed)
+                except zlib.error:
+                    text = b""
+                parts.append(
+                    keyword.decode("latin-1", "ignore")
+                    + ": "
+                    + text.decode("latin-1", "ignore")
+                )
+            elif ctype == b"iTXt":
+                decoded = SkillScanner._decode_itxt(chunk)
+                if decoded:
+                    parts.append(decoded)
+            elif ctype == b"IEND":
+                break
+            pos = end + 4
+        return "\n".join(p for p in parts if p.strip())
+
+    @staticmethod
+    def _extract_jpeg_text(data: bytes) -> str:
+        """Extract text from JPEG comment (COM) and EXIF segments."""
+        if not data.startswith(b"\xff\xd8"):
+            return ""
+        parts: list[str] = []
+        pos = 2
+        total = len(data)
+        while pos + 4 <= total:
+            if data[pos] != 0xFF:
+                break
+            marker = data[pos + 1]
+            if marker == 0xD9 or 0xD0 <= marker <= 0xD7:
+                pos += 2
+                continue
+            seg_len = int.from_bytes(data[pos + 2 : pos + 4], "big")
+            seg_start = pos + 4
+            seg_end = pos + 2 + seg_len
+            if seg_end > total or seg_len < 2:
+                break
+            segment = data[seg_start:seg_end]
+            if marker == 0xFE:
+                parts.append(segment.decode("latin-1", "ignore"))
+            elif marker == 0xE1 and segment.startswith(b"Exif"):
+                parts.append(SkillScanner._printable_runs(segment))
+            if marker == 0xDA:
+                break
+            pos = seg_end
+        return "\n".join(p for p in parts if p.strip())
+
+    def _extract_image_text(self, file_path: Path) -> str:
+        """Return text embedded in a PNG/JPEG image's metadata."""
+        try:
+            data = file_path.read_bytes()
+        except OSError:
+            return ""
+        suffix = file_path.suffix.lower()
+        if suffix == ".png":
+            return self._extract_png_text(data)
+        if suffix in (".jpg", ".jpeg"):
+            return self._extract_jpeg_text(data)
+        return ""
+
+    def _scan_image_metadata(self, file_path: Path) -> list[Finding]:
+        """Scan text embedded in image metadata (PNG/JPEG).
+
+        Images are a context-poisoning vector: instructions hidden in
+        PNG tEXt/iTXt/zTXt chunks or JPEG comment/EXIF fields are read
+        by an agent that processes the image but stay invisible to a
+        human reviewing the skill source.
+        """
+        findings: list[Finding] = []
+        text = self._extract_image_text(file_path)
+        if not text.strip():
+            return findings
+        path_str = str(file_path)
+        folded = normalize_confusables(text)
+        for pattern, severity, description, category in self.all_patterns:
+            if re.search(pattern, folded, re.IGNORECASE):
+                findings.append(
+                    Finding(
+                        severity=severity,
+                        category=category,
+                        description=f"{description} (in image metadata)",
+                        file_path=path_str,
+                        matched_content=text[:80],
+                        recommendation=(self._get_recommendation(category)),
+                    )
+                )
+        instruction_re = (
+            r"ignore\s+(previous|prior|above)|you\s+(are|must|should)\b"
+            r"|do\s+not\s+(tell|mention|reveal)"
+            r"|run\s+(the\s+)?(following|this|script)"
+            r"|execute\s+(the|this|following)"
+            r"|\bcurl\b|\bwget\b|\bbash\b|sh\s+-c|\.sh\b"
+            r"|chmod\s|\beval\s*\("
+        )
+        if re.search(instruction_re, folded, re.IGNORECASE):
+            findings.append(
+                Finding(
+                    severity=Severity.HIGH,
+                    category="prompt_injection",
+                    description=(
+                        "Instruction-like text hidden in image metadata"
+                    ),
+                    file_path=path_str,
+                    matched_content=text[:80],
+                    recommendation=(
+                        "Images must not carry agent instructions. This "
+                        "is a context-poisoning vector -- inspect the "
+                        "embedded metadata."
+                    ),
+                )
+            )
+        findings.extend(self._check_base64_blobs(text, path_str))
+        return findings
+
     def _get_recommendation(self, category: str) -> str:
         """Get remediation recommendation for a category."""
         recommendations = {
@@ -1816,6 +2382,13 @@ class SkillScanner:
                 "This skill attempts to modify "
                 "agent memory/behavior persistently."
                 " High risk of backdoor."
+            ),
+            "harness_abuse": (
+                "This skill uses a harness feature that "
+                "executes code automatically on load "
+                "(frontmatter hooks or the `!` directive). "
+                "The command runs with no model mediation -- "
+                "remove or audit it."
             ),
             "structure": (
                 "Skills with executable code require"
@@ -2019,6 +2592,14 @@ class SkillScanner:
                 )
         return findings
 
+    def _is_pytest_autoexec(self, name: str) -> bool:
+        """True if pytest auto-discovers and runs this file."""
+        return (
+            name == "conftest.py"
+            or (name.startswith("test_") and name.endswith(".py"))
+            or name.endswith("_test.py")
+        )
+
     def scan_file(self, file_path: Path) -> list[Finding]:
         """Scan a single file."""
         findings = []
@@ -2037,6 +2618,27 @@ class SkillScanner:
                 )
             )
 
+        # pytest auto-discovers conftest.py and test_*.py / *_test.py and
+        # executes them on collection -- bundling them in a skill is an
+        # ecosystem RCE vector (the agent only has to run the tests).
+        if self._is_pytest_autoexec(file_path.name):
+            findings.append(
+                Finding(
+                    severity=Severity.HIGH,
+                    category="supply_chain",
+                    description=(
+                        "Auto-executed test file: pytest runs "
+                        f"'{file_path.name}' on collection (RCE vector)"
+                    ),
+                    file_path=str(file_path),
+                    recommendation=(
+                        "pytest imports conftest.py and test files "
+                        "automatically. Review for code that runs at "
+                        "import/collection time."
+                    ),
+                )
+            )
+
         # Read and scan content
         try:
             content = file_path.read_text(
@@ -2046,6 +2648,10 @@ class SkillScanner:
             findings.extend(
                 self.scan_content(content, str(file_path)),
             )
+            if file_path.name == "package.json":
+                findings.extend(
+                    self._check_package_json(file_path, content),
+                )
         except OSError as e:
             if self.verbose:
                 print(  # noqa: T201
@@ -2354,31 +2960,50 @@ class SkillScanner:
                 )
             )
 
+        # Flag symlinks before walking files: a symlink disguised as an
+        # example file can point at a credential outside the skill.
+        result.findings.extend(
+            self._check_symlinks(skill_path),
+        )
+
         # Scan SKILL.md first
         skill_md = skill_path / "SKILL.md"
-        if skill_md.exists():
+        if skill_md.exists() and not skill_md.is_symlink():
             result.findings.extend(
                 self.scan_file(skill_md),
             )
 
-        # Scan all other files
+        # Image formats whose metadata we parse for hidden instructions
+        image_extensions = {".png", ".jpg", ".jpeg"}
+        # Binary formats with no useful text to scan
         skip_extensions = {
-            ".png",
-            ".jpg",
-            ".jpeg",
             ".gif",
             ".ico",
+            ".webp",
             ".woff",
+            ".woff2",
             ".ttf",
+            ".otf",
+            ".eot",
         }
         for file_path in skill_path.rglob("*"):
-            if file_path.is_file() and file_path != skill_md:
-                # Skip binary files
-                if file_path.suffix.lower() in skip_extensions:
-                    continue
+            if not file_path.is_file() or file_path == skill_md:
+                continue
+            # Symlinks are reported by _check_symlinks; never follow them
+            # into the file scanners (that would read the target content).
+            if file_path.is_symlink():
+                continue
+            suffix = file_path.suffix.lower()
+            if suffix in image_extensions:
                 result.findings.extend(
-                    self.scan_file(file_path),
+                    self._scan_image_metadata(file_path),
                 )
+                continue
+            if suffix in skip_extensions:
+                continue
+            result.findings.extend(
+                self.scan_file(file_path),
+            )
 
         return result
 
