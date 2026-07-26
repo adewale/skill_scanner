@@ -15,7 +15,7 @@ dev = [
     "pytest>=8.0",
     "pytest-cov>=4.0",
     "pyfakefs>=5.0",
-    "ruff>=0.4",
+    "ruff==0.16.0",
     "pre-commit>=3.0",
     "vulture>=2.11",
     "bandit>=1.7",
@@ -44,6 +44,7 @@ exclude_lines = [
 ]
 
 [tool.ruff]
+required-version = "==0.16.0"
 target-version = "py311"
 line-length = 79
 
