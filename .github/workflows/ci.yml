@@ -43,7 +43,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install linters
-        run: pip install ruff vulture bandit pyright
+        run: pip install ruff==0.16.0 vulture bandit pyright
 
       - name: Run ruff check
         run: ruff check --output-format=github .
