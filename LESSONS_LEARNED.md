@@ -17,7 +17,7 @@ semantic oracle for deep parser behavior.
 - Keep arbitrary Unicode/Markdown flowing through `SkillScanner.scan_content` and format-prefixed
   arbitrary bytes flowing through every supported image metadata extractor.
 - Pair those totality checks with format-valid builders that assert the exact extracted metadata;
-  `test_png_text_chunk_round_trips_to_scannable_text` is the first such semantic oracle.
+  `test_png_text_chunk_round_trips_to_scannable_text` is the first generated semantic oracle.
 - Add a structured-valid oracle when expanding a metadata format, rather than treating a
   no-exception result on random bytes as proof that valid records are preserved.
 - Keep `test_properties.py` in the normal pytest CI job so both layers are continuously collected
