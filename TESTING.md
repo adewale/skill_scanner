@@ -24,7 +24,16 @@ rules.
 Every input in Tier 1 is ordinary, harmless text. If a test needs a
 SKILL.md, it uses `build_skill_md()` with content like `"Hello world."`.
 If it needs a provenance object, it constructs one with `example.com`
-URLs. Nothing in Tier 1 would trigger a detection if scanned.
+URLs. No Tier 1 input is a payload or a trigger string.
+
+One known exception: the `_should_skip_finding()` whitelist tests pass
+the scanner's own regex strings and minimal sample text (for example
+`read .env file` and `http://localhost:4444/api`) to check that the
+whitelist rejects them. Those lines self-match when
+`test_infrastructure.py` itself is scanned (5 findings today), so the
+self-scan test treats it as a "noisy" file with a bounded count, like
+`skill_scanner.py` and `test_scanning.py`. No other Tier 1 content may
+trigger a detection.
 
 **Covers:** `Severity`, `Finding`, `SkillProvenance`, `SkillMetadata`,
 `ScanResult`, `get_default_skill_paths()`, `parse_skill_ast()`,
@@ -50,7 +59,8 @@ RFC 2606 reserved names (`example.com`).
 
 **Covers:** All 8 detection categories (positive + false-positive),
 AST-aware severity context, hidden content in HTML comments, base64 blob
-heuristic, whitelist integration, self-scan safety gate, filesystem
+heuristic, whitelist integration, self-scan safety gate, fixture-skill
+gate (the CLI against `fixtures/skills/`), filesystem
 integration via `pyfakefs` (`scan_file()`, `scan_skill()`,
 `scan_directory()`), non-markdown line-by-line scanning, suspicious
 metadata detection.
@@ -69,9 +79,30 @@ The test suite includes a self-scan that runs the scanner against its
 own source files. Files that contain pattern definitions or trigger
 strings (`skill_scanner.py`, `test_scanning.py`,
 `test_infrastructure.py`) will self-match by design -- we verify the
-count is bounded (< 200 findings each). Other project files
-(`conftest.py`, `test_documentation.py`) must produce zero HIGH/CRITICAL
-findings.
+count is bounded in both directions: at least a per-file floor (about
+half the measured count, so a scanner that stops detecting fails) and
+fewer than 200. Other project files (`conftest.py`,
+`test_documentation.py`) must produce zero HIGH/CRITICAL findings. Every
+listed file must exist; a renamed file fails the test instead of being
+skipped.
+
+#### Fixture skills (CI self-scan gate)
+
+A scanner gate is only meaningful if it has something to catch.
+`fixtures/skills/` holds two committed skills that CI scans with the
+real CLI (`skill_scanner.py <dir> --fail-on-high`):
+
+- `malicious-canary/` -- the known positive. It follows the Tier 2 rule
+  (minimal, non-functional triggers) and must produce HIGH/CRITICAL
+  findings, so `--fail-on-high` exits 1.
+- `benign/` -- the known negative. It must produce no detection
+  findings; its only finding is the MEDIUM provenance notice every local
+  skill gets (only `/.well-known/skills/` URLs count as official).
+
+`test_scanning.py::TestFixtureSkillGate` asserts the exact expected
+findings for both. Because the canary is committed, running
+`skill_scanner.py .` inside this repository reports it; that is
+expected.
 
 ### Tier 3: Documentation consistency (`test_documentation.py`)
 
@@ -137,15 +168,17 @@ uv run --extra dev pytest test_documentation.py
 # Generative hostile-boundary checks
 uv run --extra dev pytest test_properties.py
 
-# With coverage
-uv run --extra dev pytest --cov --cov-report=term-missing
+# With branch coverage (what CI runs)
+uv run --extra dev pytest --cov --cov-branch --cov-report=term-missing
 ```
 
 ## Coverage
 
 Coverage is measured on `skill_scanner.py` only (test files and
-`conftest.py` are excluded). The threshold is **80%**, enforced in
-`pyproject.toml`.
+`conftest.py` are excluded). CI measures **branch** coverage and fails
+below the `fail_under` floor in `pyproject.toml`, currently **78%** (the
+measured value when CI started enforcing it). Ratchet the floor up as
+coverage improves; do not lower it to make a change pass.
 
 Lines excluded from coverage measurement:
 - `pragma: no cover`

@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **CI self-scan gate now scans committed fixture skills.** It used to
+  scan `.`, which contains no SKILL.md, so it reported "Skills found: 0"
+  and always passed. CI (and the pre-commit hook) now scan
+  `fixtures/skills/benign` (must pass `--fail-on-high`) and
+  `fixtures/skills/malicious-canary` (must trip it), and
+  `TestFixtureSkillGate` asserts the expected findings for both.
+- **Self-scan tests** now require a per-file minimum number of findings
+  for the noisy files and fail when a listed file is missing, instead of
+  skipping it.
+- **Coverage is enforced in CI.** CI runs `pytest --cov --cov-branch`;
+  `fail_under` is set to the measured branch coverage (78%). The previous
+  80% floor was never run in CI, and branch coverage was below it.
+
 ### Added
 
 - **Dangerous Skills attack-vector coverage**
