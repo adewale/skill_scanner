@@ -1100,7 +1100,7 @@ class SkillScanner:
         ),
         # Variable obfuscation
         (
-            r"\$\{\w+::\d+:\d+\}",
+            r"\$\{\w+:\d+:\d+\}",
             Severity.MEDIUM,
             "Bash substring obfuscation",
         ),
