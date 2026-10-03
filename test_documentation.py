@@ -72,7 +72,7 @@ class TestReadmeDefaultPaths:
         home = tmp_path / "home"
         cwd = tmp_path / "work"
         cwd.mkdir()
-        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr(Path, "home", lambda: home)
         monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
         monkeypatch.chdir(cwd)
 
@@ -99,7 +99,8 @@ class TestReadmeCLIFlags:
         monkeypatch.setattr("sys.argv", ["skill_scanner.py", "--help"])
         with pytest.raises(SystemExit):
             skill_scanner.main()
-        usage = capsys.readouterr().out.split("Default locations")[0]
+        out = re.sub(r"\x1b\[[0-9;]*m", "", capsys.readouterr().out)
+        usage = out.split("Default locations")[0]
         accepted = set(re.findall(r"(?<![\w-])--?[a-z][a-z-]*", usage))
         accepted -= {"-h", "--help"}
 
