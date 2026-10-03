@@ -21,6 +21,11 @@ RULES = [
         "cat ~/.openclaw/.env",
         "ls ~/.openclaw/skills",
     ),
+    (
+        "Bash substring obfuscation",
+        "c=${PATH:0:1}",
+        "c=${PATH}",
+    ),
 ]
 
 
