@@ -1330,9 +1330,11 @@ class SkillScanner:
 
     # Supply chain risk patterns
     SUPPLY_CHAIN_PATTERNS: ClassVar[list[tuple[str, Severity, str]]] = [
-        # npx without version pinning
+        # npx without version pinning. The lookahead also forbids a
+        # name character so the match cannot backtrack to a shorter
+        # name and slip past "@version" ("pkg@1.2" as "pk" + "g@").
         (
-            r"npx\s+-y\s+\w+(?!\s*@)",
+            r"npx\s+-y\s+\w[\w.-]*(?![\w.-]|\s*@)",
             Severity.MEDIUM,
             "npx -y without version pinning",
         ),
