@@ -26,6 +26,11 @@ RULES = [
         "c=${PATH:0:1}",
         "c=${PATH}",
     ),
+    (
+        "npx -y without version pinning",
+        "npx -y create-thing",
+        "npx -y create-thing@1.2.3",
+    ),
 ]
 
 
