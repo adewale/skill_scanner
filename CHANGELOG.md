@@ -54,9 +54,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   flags any token mixing Latin with a look-alike script (plus non-Latin
   words that spell a sensitive command), and `_check_idn_homographs`
   decodes `xn--` punycode labels to catch IDN homograph domains.
-- **Test suite** with 243 tests across three tiers:
+- **Test suite** across three tiers:
   - Tier 1 (`test_infrastructure.py`): Unit tests for dataclasses, trust/risk scoring, AST parsing, whitelists, severity adjustment, provenance/structure analysis
   - Tier 2 (`test_scanning.py`): Detection tests for all 8 pattern categories (positive + false-positive), integration tests via pyfakefs
+  - Tier 2 (`test_detector_rules.py`): every regex rule tested from both sides — a malicious line that must produce that rule's finding and a near-miss that must not
   - Tier 3 (`test_documentation.py`): Cross-references docs against code to catch documentation drift
 - **Testing philosophy** documented in `TESTING.md`: three-tier architecture, safe address conventions (RFC 5737/2606), self-scan safety gate, and guidelines for adding new tests.
 - **Developer tooling**:
@@ -80,6 +81,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- "Google Cloud credentials access" and both "OpenClaw credentials access" rules never fired: confusable folding rewrites `cl` to `d` before matching, so `gcloud`, `.clawdbot` and `.openclaw` could not match.
+- "Bash substring obfuscation" required `${var::n:m}` (not bash syntax) and missed `${var:n:m}`.
+- "npx -y without version pinning" flagged pinned `npx -y pkg@1.2.3` (regex backtracking) and now treats only `@<digit>` as a pin.
+- README now documents `--url` and the legacy `~/openclaw/skills/` location; HOW_IT_WORKS no longer claims 272+ regex patterns (there are 117).
 - False positives on Cloudflare Workers skills where `interface Env` triggered "Environment file access" alerts.
 - False positives on `localhost:8788` flagged as "URL with non-standard port".
 - `curl | bash` in a TypeScript example code block no longer reported at the same severity as in a bash code block.
