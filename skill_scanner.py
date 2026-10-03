@@ -881,8 +881,11 @@ class SkillScanner:
             Severity.HIGH,
             "Kubernetes credentials access",
         ),
+        # Patterns run on confusable-folded text, where "cl" becomes
+        # "d" (see MULTI_CHAR_CONFUSABLES), so a literal "cl" must also
+        # accept its folded spelling or the rule can never match.
         (
-            r"~?/?\.config/gcloud/",
+            r"~?/?\.config/g(cl|d)oud/",
             Severity.HIGH,
             "Google Cloud credentials access",
         ),
@@ -897,12 +900,12 @@ class SkillScanner:
             "Environment file access",
         ),
         (
-            r"\.clawdbot/\.env",
+            r"\.(cl|d)awdbot/\.env",
             Severity.CRITICAL,
             "OpenClaw credentials access",
         ),
         (
-            r"\.openclaw/\.env",
+            r"\.open(cl|d)aw/\.env",
             Severity.CRITICAL,
             "OpenClaw credentials access",
         ),
