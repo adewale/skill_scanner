@@ -534,6 +534,11 @@ RULES = [
         "npx -y create-thing@1.2.3",
     ),
     (
+        "npx -y without version pinning",
+        "npx -y create-thing@latest",
+        "npx -y create-thing@5.0.1",
+    ),
+    (
         "npm install without version",
         "npm install left-pad",
         "npm install left-pad@1.3.0",
