@@ -33,6 +33,7 @@ skill_scanner.py [OPTIONS] [PATH]
 | `--json` | Output results as JSON (useful for CI/CD pipelines). |
 | `--fail-on-high` | Exit with code 1 if any HIGH or CRITICAL findings exist. |
 | `--list-paths` | Print every default skill path and whether it exists, then exit. |
+| `--url URL` | Fetch a single skill from a URL (GitHub blob URLs are converted to raw) and scan it. |
 
 ### Examples
 
@@ -58,7 +59,7 @@ uv run skill_scanner.py --list-paths
 | Cursor | `~/.cursor/skills/`, `.cursor/skills/` |
 | OpenAI Codex CLI | `~/.codex/skills/` |
 | OpenCode | `~/.config/opencode/skills/`, `.opencode/skills/` |
-| OpenClaw / Clawdbot | `~/.openclaw/skills/`, `~/.clawdbot/skills/`, `./skills/` |
+| OpenClaw / Clawdbot | `~/.openclaw/skills/`, `~/.clawdbot/skills/`, `~/openclaw/skills/`, `./skills/` |
 | Letta Code | `.skills/` |
 | Skillport | `~/.skillport/skills/` |
 | OpenSkills | `.agent/skills/` |
