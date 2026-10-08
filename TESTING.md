@@ -5,8 +5,9 @@ malware. This creates a unique testing challenge: the test suite itself must
 avoid becoming a repository of malicious payloads while still verifying that
 detection works.
 
-We solve this with a **three-tier testing architecture** where each tier has
-strict rules about what content it may contain.
+We solve this with a **three-tier testing architecture**, plus a cross-tier
+generative boundary layer. Each test still follows the content-safety rules of
+the tier whose behavior it exercises.
 
 ## The Three Tiers
 
@@ -92,6 +93,25 @@ updating the README, will fail CI.
 HOW_IT_WORKS pattern counts, function references;
 skill_threats_analysis.md coverage table counts, total row consistency.
 
+## Cross-Tier Generative Boundaries (`test_properties.py`)
+
+Property-based checks complement the three content tiers at inputs that are too
+large to cover with examples alone. They are not a fourth content-safety tier:
+benign infrastructure inputs follow Tier 1 rules, and generated detection
+inputs follow Tier 2's synthetic-trigger and safe-address rules.
+
+The layer deliberately uses two kinds of generator:
+
+- arbitrary Unicode/Markdown and corrupt or truncated image bytes to assert
+  totality and bounded failure at hostile input boundaries;
+- structured-valid format builders with a known semantic oracle to prove that
+  valid metadata is preserved and remains scannable.
+
+Random bytes alone almost never reach a valid metadata record, so a no-crash
+campaign cannot substitute for structured-valid preservation checks. The
+project-specific rationale and enforcement rule are recorded in
+[`LESSONS_LEARNED.md`](LESSONS_LEARNED.md).
+
 ## Shared Infrastructure (`conftest.py`)
 
 Two shared helpers support all three tiers:
@@ -113,6 +133,9 @@ uv run --extra dev pytest
 uv run --extra dev pytest test_infrastructure.py
 uv run --extra dev pytest test_scanning.py
 uv run --extra dev pytest test_documentation.py
+
+# Generative hostile-boundary checks
+uv run --extra dev pytest test_properties.py
 
 # With coverage
 uv run --extra dev pytest --cov --cov-report=term-missing
@@ -141,3 +164,6 @@ When adding tests, place them in the correct tier:
    addresses.
 3. **Adding or changing a doc claim?** Add a Tier 3 test that
    cross-references the claim against the code.
+4. **Testing an unbounded hostile input space?** Add a property in
+   `test_properties.py`. Pair arbitrary invalid-input totality with a
+   structured-valid semantic oracle whenever the format has valid records.
