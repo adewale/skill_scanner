@@ -18,8 +18,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   for the noisy files and fail when a listed file is missing, instead of
   skipping it.
 - **Coverage is enforced in CI.** CI runs `pytest --cov --cov-branch`;
-  `fail_under` is set to the measured branch coverage (78%). The previous
-  80% floor was never run in CI, and branch coverage was below it.
+  `fail_under` is 79, just under the measured branch coverage (79.8%,
+  including the property tests). The previous 80% floor was never run in
+  CI, and branch coverage was below it.
 
 ### Added
 

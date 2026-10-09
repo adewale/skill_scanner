@@ -36,10 +36,10 @@ source = ["skill_scanner"]
 omit = ["test_*.py", "conftest.py"]
 
 [tool.coverage.report]
-# Branch coverage (CI runs pytest --cov --cov-branch), set to the measured
-# value on 2026-09-27 (78.2%). Ratchet this up as coverage improves; the
-# long-term target is 80.
-fail_under = 78
+# Branch coverage (CI runs pytest --cov --cov-branch). Measured 78.2% on
+# 2026-09-27 and 79.8% on 2026-10-09 once test_properties.py (#12) landed.
+# Ratchet this up as coverage improves; the long-term target is 80.
+fail_under = 79
 show_missing = true
 exclude_lines = [
     "pragma: no cover",

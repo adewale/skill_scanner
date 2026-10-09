@@ -176,8 +176,8 @@ uv run --extra dev pytest --cov --cov-branch --cov-report=term-missing
 
 Coverage is measured on `skill_scanner.py` only (test files and
 `conftest.py` are excluded). CI measures **branch** coverage and fails
-below the `fail_under` floor in `pyproject.toml`, currently **78%** (the
-measured value when CI started enforcing it). Ratchet the floor up as
+below the `fail_under` floor in `pyproject.toml`, currently **79%** (measured
+branch coverage is 79.8% on Python 3.11-3.13). Ratchet the floor up as
 coverage improves; do not lower it to make a change pass.
 
 Lines excluded from coverage measurement:
