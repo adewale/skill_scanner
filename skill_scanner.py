@@ -881,8 +881,11 @@ class SkillScanner:
             Severity.HIGH,
             "Kubernetes credentials access",
         ),
+        # Patterns run on confusable-folded text, where "cl" becomes
+        # "d" (see MULTI_CHAR_CONFUSABLES), so a literal "cl" must also
+        # accept its folded spelling or the rule can never match.
         (
-            r"~?/?\.config/gcloud/",
+            r"~?/?\.config/g(cl|d)oud/",
             Severity.HIGH,
             "Google Cloud credentials access",
         ),
@@ -897,12 +900,12 @@ class SkillScanner:
             "Environment file access",
         ),
         (
-            r"\.clawdbot/\.env",
+            r"\.(cl|d)awdbot/\.env",
             Severity.CRITICAL,
             "OpenClaw credentials access",
         ),
         (
-            r"\.openclaw/\.env",
+            r"\.open(cl|d)aw/\.env",
             Severity.CRITICAL,
             "OpenClaw credentials access",
         ),
@@ -1097,7 +1100,7 @@ class SkillScanner:
         ),
         # Variable obfuscation
         (
-            r"\$\{\w+::\d+:\d+\}",
+            r"\$\{\w+:\d+:\d+\}",
             Severity.MEDIUM,
             "Bash substring obfuscation",
         ),
@@ -1327,9 +1330,11 @@ class SkillScanner:
 
     # Supply chain risk patterns
     SUPPLY_CHAIN_PATTERNS: ClassVar[list[tuple[str, Severity, str]]] = [
-        # npx without version pinning
+        # npx without version pinning. Only "@<digit>" pins ("@latest"
+        # does not). The lookahead also forbids a name character so the
+        # match cannot backtrack to a shorter name and slip past it.
         (
-            r"npx\s+-y\s+\w+(?!\s*@)",
+            r"npx\s+-y\s+\w[\w.-]*(?![\w.-]|\s*@\d)",
             Severity.MEDIUM,
             "npx -y without version pinning",
         ),

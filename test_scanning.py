@@ -6,7 +6,10 @@ RFC 2606 domains (example.com) are used for any URLs.
 """
 
 import base64
+import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 from conftest import build_skill_md
@@ -859,9 +862,21 @@ class TestSelfScan:
         "test_documentation.py",
     ]
 
+    # Minimum findings per noisy file: roughly half the counts measured
+    # on 2026-09-27 (64, 65 and 5). A floor catches a scanner that has
+    # stopped detecting (e.g. patterns failing to load), which an upper
+    # bound alone would pass; it is loose enough that adding or removing
+    # a pattern or test does not need a bound change.
+    NOISY_FILE_MIN_FINDINGS = {
+        "skill_scanner.py": 32,
+        "test_scanning.py": 32,
+        "test_infrastructure.py": 3,
+    }
+
     def test_self_scan_noisy_files_bounded(self):
         """Files that contain pattern definitions or trigger strings
-        will self-match.  Verify the count is bounded (< 200 each).
+        will self-match.  Verify the count is within bounds
+        (at least the floor above, < 200 each).
 
         - skill_scanner.py: defines every regex pattern.
         - test_scanning.py: contains minimal trigger strings.
@@ -871,24 +886,17 @@ class TestSelfScan:
         scanner = SkillScanner()
         project_dir = Path(__file__).resolve().parent
 
-        noisy_files = [
-            "skill_scanner.py",
-            "test_scanning.py",
-            "test_infrastructure.py",
-        ]
-
-        for name in noisy_files:
+        for name, min_findings in self.NOISY_FILE_MIN_FINDINGS.items():
             fpath = project_dir / name
-            if not fpath.exists():
-                continue
+            assert fpath.exists(), f"self-scan target missing: {name}"
             content = fpath.read_text(encoding="utf-8", errors="ignore")
             # Scan as .py -- line-by-line engine
             findings = scanner.scan_content(content, name)
             # These files contain pattern regexes and trigger
             # strings, so they self-match by design.
-            # The count should be bounded (sanity check).
-            assert len(findings) < 200, (
-                f"{name} produced {len(findings)} findings -- expected < 200"
+            assert min_findings <= len(findings) < 200, (
+                f"{name} produced {len(findings)} findings -- "
+                f"expected {min_findings} to 199"
             )
 
     def test_self_scan_clean_files(self):
@@ -904,8 +912,7 @@ class TestSelfScan:
 
         for name in clean_files:
             fpath = project_dir / name
-            if not fpath.exists():
-                continue
+            assert fpath.exists(), f"self-scan target missing: {name}"
             content = fpath.read_text(encoding="utf-8", errors="ignore")
             findings = scanner.scan_content(content, name)
             high_or_crit = [
@@ -917,6 +924,66 @@ class TestSelfScan:
                 f"{name} triggered HIGH/CRITICAL: "
                 f"{[(f.category, f.description, f.matched_content) for f in high_or_crit]}"
             )
+
+
+# ================================================================
+# CI self-scan gate: committed fixture skills
+# ================================================================
+
+
+class TestFixtureSkillGate:
+    """Run the CLI, as CI does, on the committed fixture skills.
+
+    - fixtures/skills/malicious-canary is the known positive: every
+      detection in it must be HIGH/CRITICAL, so ``--fail-on-high``
+      exits 1. A scanner that detects nothing fails here.
+    - fixtures/skills/benign is the known negative: no detection
+      findings. Every local skill also gets one MEDIUM provenance
+      notice (only /.well-known/skills/ URLs count as official), so
+      that is the only finding it may have.
+    """
+
+    PROJECT_DIR = Path(__file__).resolve().parent
+    FIXTURES_DIR = PROJECT_DIR / "fixtures" / "skills"
+
+    def _run_cli(self, fixture):
+        skill_dir = self.FIXTURES_DIR / fixture
+        assert (skill_dir / "SKILL.md").exists(), f"missing {skill_dir}"
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(self.PROJECT_DIR / "skill_scanner.py"),
+                str(skill_dir),
+                "--fail-on-high",
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        report = json.loads(proc.stdout)
+        assert report["total_skills"] == 1, report
+        return proc.returncode, report["results"][0]["findings"]
+
+    def test_malicious_canary_fails_the_gate(self):
+        returncode, findings = self._run_cli("malicious-canary")
+        detections = [f for f in findings if f["category"] != "provenance"]
+
+        assert returncode == 1
+        assert {f["category"] for f in detections} == {
+            "dangerous_shell",
+            "exfiltration",
+            "prompt_injection",
+        }
+        assert all(f["severity"] in ("HIGH", "CRITICAL") for f in detections)
+
+    def test_benign_fixture_passes_with_no_detections(self):
+        returncode, findings = self._run_cli("benign")
+
+        assert returncode == 0
+        assert [(f["category"], f["severity"]) for f in findings] == [
+            ("provenance", "MEDIUM")
+        ]
 
 
 # ================================================================

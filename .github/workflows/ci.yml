@@ -24,13 +24,26 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install hypothesis pytest pyfakefs pyyaml markdown-it-py
+          pip install hypothesis pytest pytest-cov pyfakefs pyyaml markdown-it-py
 
-      - name: Run tests
-        run: python -m pytest -v --tb=short
+      # Branch coverage, enforced by [tool.coverage.report] fail_under in
+      # pyproject.toml (set to the measured value; ratchet it up, never down).
+      - name: Run tests (with branch coverage floor)
+        run: python -m pytest -v --tb=short --cov --cov-branch --cov-report=term-missing
 
+      # Scans committed fixture skills in both directions. (Scanning "."
+      # found 0 skills -- the repo root has no SKILL.md -- so it always
+      # passed.) test_scanning.py::TestFixtureSkillGate checks the exact
+      # findings; this step runs the real CLI gate.
       - name: Self-scan (security gate)
-        run: python skill_scanner.py . --fail-on-high
+        run: |
+          # Known negative: must pass --fail-on-high.
+          python skill_scanner.py fixtures/skills/benign --fail-on-high
+          # Known positive: must trip --fail-on-high (exit 1). The JSON check
+          # tells "HIGH/CRITICAL found" apart from a crash, which also exits 1.
+          status=0
+          python skill_scanner.py fixtures/skills/malicious-canary --fail-on-high --json > "$RUNNER_TEMP/canary.json" || status=$?
+          python -c 'import json, sys; r = json.load(open(sys.argv[2])); n = r["total_high"] + r["total_critical"]; sys.exit(0 if sys.argv[1] == "1" and r["total_skills"] == 1 and n > 0 else f"canary not flagged: exit {sys.argv[1]}, {n} HIGH/CRITICAL")' "$status" "$RUNNER_TEMP/canary.json"
 
   lint:
     runs-on: ubuntu-latest

@@ -32,9 +32,12 @@ repos:
         pass_filenames: false
         additional_dependencies: ['bandit>=1.7']
 
+      # Scanning "." finds no skills (and would now find the malicious
+      # canary fixture); the canary direction is checked by pytest
+      # (test_scanning.py::TestFixtureSkillGate).
       - id: self-scan
-        name: Skill Scanner self-scan
-        entry: python skill_scanner.py . --fail-on-high
+        name: Skill Scanner self-scan (benign fixture)
+        entry: python skill_scanner.py fixtures/skills/benign --fail-on-high
         language: python
         pass_filenames: false
         additional_dependencies: ['pyyaml>=6.0', 'markdown-it-py>=3.0']

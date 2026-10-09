@@ -25,13 +25,13 @@ Matches are mapped back to the original bytes so findings still show the raw, ob
 
 ## Detection Engine
 
-The core is **272+ regex patterns across 8 categories**: dangerous shell commands (including scripting-language exec sinks like `os.system`/`subprocess(shell=True)`), data exfiltration, suspicious URLs, obfuscation, social engineering, prompt injection, memory poisoning, and supply chain risks. Each pattern has a severity (CRITICAL through INFO). These 8 pattern-list categories are joined by a 9th, `harness_abuse`, raised only by the structural detectors below.
+The core is **110+ regex patterns across 8 categories**: dangerous shell commands (including scripting-language exec sinks like `os.system`/`subprocess(shell=True)`), data exfiltration, suspicious URLs, obfuscation, social engineering, prompt injection, memory poisoning, and supply chain risks. Each pattern has a severity (CRITICAL through INFO). These 8 pattern-list categories are joined by a 9th, `harness_abuse`, raised only by the structural detectors below.
 
 Three layers reduce false positives:
 
 1. **Whitelists** -- TypeScript `Env` type patterns and safe localhost dev ports (3000, 5173, 8787, etc.) are skipped via `_should_skip_finding()`.
 2. **Severity adjustment** -- `_adjust_severity_for_context()` downgrades findings in documentation languages (TypeScript, Python examples) and upgrades findings in executable languages (bash, sh). This is what lets `os.system(...)` be a low-noise example in a docs code block but a HIGH finding in a real `.py` file.
-3. **AST-aware scanning** -- Code blocks, prose, and hidden content (HTML comments) are scanned separately with category-appropriate patterns. Prose only gets checked for prompt injection, memory poisoning, and social engineering.
+3. **AST-aware scanning** -- Code blocks, prose, and hidden content (HTML comments) are scanned separately with category-appropriate patterns. Prose only gets checked for prompt injection, memory poisoning, social engineering, and supply chain (so inline code such as `npx skills add` is caught).
 
 A special heuristic (`_check_base64_blobs()`) decodes any base64 string over 100 chars and checks if it contains shell keywords (the decoded text is also confusable-folded first).
 
