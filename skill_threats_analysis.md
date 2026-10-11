@@ -92,7 +92,7 @@ Based on research from:
 | Dynamic Function constructor | HIGH | ✅ Yes | Regex pattern |
 | Hex-encoded strings | HIGH | ✅ Yes | Regex pattern |
 | Octal-encoded strings | HIGH | ✅ Yes | Regex pattern |
-| Bash substring obfuscation (`${var::n:m}`) | MEDIUM | ✅ Yes | Regex pattern |
+| Bash substring obfuscation (`${var:n:m}`) | MEDIUM | ✅ Yes | Regex pattern |
 | Arithmetic obfuscation | LOW | ✅ Yes | Regex pattern |
 | Unmarked code blocks with shell commands | MEDIUM | ✅ Yes | AST analysis |
 

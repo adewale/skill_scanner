@@ -4,9 +4,10 @@ Verify that README.md, HOW_IT_WORKS.md, and skill_threats_analysis.md
 accurately describe what the code actually does.
 """
 
-import inspect
 import re
 from pathlib import Path
+
+import pytest
 
 from skill_scanner import (
     SkillScanner,
@@ -55,52 +56,58 @@ class TestReadmeDetectionCategories:
             )
 
 
+def _readme_table(heading: str) -> str:
+    """Return the README section under ``## heading`` (up to the next
+    ``##``)."""
+    readme = _read("README.md")
+    section = readme.split(f"## {heading}\n", 1)[1]
+    return section.split("\n## ", 1)[0]
+
+
 class TestReadmeDefaultPaths:
-    """README default scan locations match get_default_skill_paths()."""
+    """README's default-location table lists exactly the paths that
+    get_default_skill_paths() scans."""
 
-    def test_readme_mentions_key_paths(self):
-        readme = _read("README.md")
-        # Check a representative subset that the README table claims
-        expected_fragments = [
-            ".claude/skills",
-            ".cursor/skills",
-            ".codex/skills",
-            "opencode",
-            ".openclaw/skills",
-            ".clawdbot/skills",
-            ".skills",
-            ".skillport/skills",
-            ".agent/skills",
-        ]
-        for frag in expected_fragments:
-            assert frag in readme, (
-                f"README.md missing default path fragment: {frag}"
-            )
+    def test_table_matches_scanned_paths(self, monkeypatch, tmp_path):
+        home = tmp_path / "home"
+        cwd = tmp_path / "work"
+        cwd.mkdir()
+        monkeypatch.setattr(Path, "home", lambda: home)
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+        monkeypatch.chdir(cwd)
 
-    def test_path_count_consistent(self):
-        paths = get_default_skill_paths()
-        # README mentions ~14 paths; code returns exactly 14
-        assert len(paths) == 14
+        def as_documented(path: Path) -> str:
+            if path.is_relative_to(home):
+                return f"~/{path.relative_to(home).as_posix()}/"
+            rel = path.relative_to(cwd).as_posix()
+            return f"{rel}/" if rel.startswith(".") else f"./{rel}/"
+
+        scanned = {as_documented(p) for p in get_default_skill_paths()}
+        documented = set(
+            re.findall(r"`([^`]+/)`", _readme_table("Default scan locations"))
+        )
+        assert documented == scanned
 
 
 class TestReadmeCLIFlags:
-    """README CLI flags match argparse definitions."""
+    """README's Options table documents exactly the flags the real
+    argument parser accepts."""
 
-    def test_all_flags_documented(self):
-        readme = _read("README.md")
-        src = inspect.getsource(
-            __import__("skill_scanner").main,
+    def test_options_table_matches_help(self, capsys, monkeypatch):
+        import skill_scanner
+
+        monkeypatch.setattr("sys.argv", ["skill_scanner.py", "--help"])
+        with pytest.raises(SystemExit):
+            skill_scanner.main()
+        out = re.sub(r"\x1b\[[0-9;]*m", "", capsys.readouterr().out)
+        usage = out.split("Default locations")[0]
+        accepted = set(re.findall(r"(?<![\w-])--?[a-z][a-z-]*", usage))
+        accepted -= {"-h", "--help"}
+
+        documented = set(
+            re.findall(r"`(--?[a-z][a-z-]*)", _readme_table("Usage"))
         )
-        flags = [
-            "--verbose",
-            "--all",
-            "--json",
-            "--fail-on-high",
-            "--list-paths",
-        ]
-        for flag in flags:
-            assert flag in readme, f"README missing CLI flag: {flag}"
-            assert flag in src, f"main() missing CLI flag: {flag}"
+        assert documented == accepted
 
 
 # ---------------------------------------------------------------
@@ -109,21 +116,18 @@ class TestReadmeCLIFlags:
 
 
 class TestHowItWorksPatternCount:
-    """HOW_IT_WORKS.md claims '272+ patterns' -- verify lower bound."""
+    """HOW_IT_WORKS.md's "N+ regex patterns" claim is a true lower
+    bound."""
 
-    def test_pattern_count_at_least_90(self):
-        """all_patterns is a list of tuples (one per compiled regex).
-        The doc says 272+ patterns but that counts threat table rows
-        including non-regex detections; the compiled regex list should
-        have >= 90 entries (actual: 97)."""
-        scanner = SkillScanner()
-        assert len(scanner.all_patterns) >= 90, (
-            f"Expected >= 90 compiled patterns, got {len(scanner.all_patterns)}"
-        )
-
-    def test_how_it_works_claims_272_plus(self):
+    def test_claimed_pattern_count_is_a_lower_bound(self):
         doc = _read("HOW_IT_WORKS.md")
-        assert "272" in doc
+        match = re.search(r"(\d+)\+ regex patterns", doc)
+        assert match, "HOW_IT_WORKS.md no longer states a pattern count"
+        scanner = SkillScanner()
+        actual = len(scanner.all_patterns) + len(
+            scanner.GLOBAL_MEMORY_PATTERNS
+        )
+        assert int(match.group(1)) <= actual
 
 
 class TestHowItWorksFunctionReferences:
@@ -191,79 +195,13 @@ class TestThreatAnalysisCoverage:
         doc = _read("skill_threats_analysis.md")
         assert "Coverage Summary" in doc
 
-    def test_dangerous_shell_count(self):
+    @pytest.mark.parametrize("row_name", list(CATEGORIES))
+    def test_category_count_matches_code(self, row_name):
         doc = _read("skill_threats_analysis.md")
-        scanner = SkillScanner()
-        _, doc_detects = self._extract_row(doc, "Dangerous Shell")
-        code_count = len(scanner.DANGEROUS_SHELL_PATTERNS)
+        _, doc_detects = self._extract_row(doc, row_name)
+        code_count = len(getattr(SkillScanner, self.CATEGORIES[row_name]))
         assert code_count == doc_detects, (
-            f"Dangerous Shell: code has {code_count}, doc claims {doc_detects}"
-        )
-
-    def test_exfiltration_count(self):
-        doc = _read("skill_threats_analysis.md")
-        scanner = SkillScanner()
-        _, doc_detects = self._extract_row(doc, "Data Exfiltration")
-        code_count = len(scanner.EXFILTRATION_PATTERNS)
-        assert code_count == doc_detects, (
-            f"Exfiltration: code has {code_count}, doc claims {doc_detects}"
-        )
-
-    def test_suspicious_url_count(self):
-        doc = _read("skill_threats_analysis.md")
-        scanner = SkillScanner()
-        _, doc_detects = self._extract_row(doc, "Suspicious URL")
-        code_count = len(scanner.SUSPICIOUS_URL_PATTERNS)
-        assert code_count == doc_detects, (
-            f"Suspicious URL: code has {code_count}, doc claims {doc_detects}"
-        )
-
-    def test_obfuscation_count(self):
-        doc = _read("skill_threats_analysis.md")
-        scanner = SkillScanner()
-        _, doc_detects = self._extract_row(doc, "Obfuscation")
-        code_count = len(scanner.OBFUSCATION_PATTERNS)
-        assert code_count == doc_detects, (
-            f"Obfuscation: code has {code_count}, doc claims {doc_detects}"
-        )
-
-    def test_supply_chain_count(self):
-        doc = _read("skill_threats_analysis.md")
-        scanner = SkillScanner()
-        _, doc_detects = self._extract_row(doc, "Supply Chain")
-        code_count = len(scanner.SUPPLY_CHAIN_PATTERNS)
-        assert code_count == doc_detects, (
-            f"Supply Chain: code has {code_count}, doc claims {doc_detects}"
-        )
-
-    def test_prompt_injection_count(self):
-        doc = _read("skill_threats_analysis.md")
-        scanner = SkillScanner()
-        _, doc_detects = self._extract_row(doc, "Prompt Injection")
-        code_count = len(scanner.PROMPT_INJECTION_PATTERNS)
-        assert code_count == doc_detects, (
-            f"Prompt Injection: code has {code_count}, "
-            f"doc claims {doc_detects}"
-        )
-
-    def test_memory_poisoning_count(self):
-        doc = _read("skill_threats_analysis.md")
-        scanner = SkillScanner()
-        _, doc_detects = self._extract_row(doc, "Memory Poisoning")
-        code_count = len(scanner.MEMORY_POISONING_PATTERNS)
-        assert code_count == doc_detects, (
-            f"Memory Poisoning: code has {code_count}, "
-            f"doc claims {doc_detects}"
-        )
-
-    def test_social_engineering_count(self):
-        doc = _read("skill_threats_analysis.md")
-        scanner = SkillScanner()
-        _, doc_detects = self._extract_row(doc, "Social Engineering")
-        code_count = len(scanner.SOCIAL_ENGINEERING_PATTERNS)
-        assert code_count == doc_detects, (
-            f"Social Engineering: code has {code_count}, "
-            f"doc claims {doc_detects}"
+            f"{row_name}: code has {code_count}, doc claims {doc_detects}"
         )
 
     def test_total_all_patterns(self):
